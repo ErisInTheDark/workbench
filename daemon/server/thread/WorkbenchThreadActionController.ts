@@ -373,11 +373,11 @@ export default class WorkbenchThreadActionController {
 
   private async withAutoCompactStatus<Thread extends ThreadPayload>(thread: Thread): Promise<Thread> {
     if (thread.isDraft) return thread;
-    const willAutoCompact = await this.owners.autoCompact.observe({
+    const autoCompactCause = await this.owners.autoCompact.observe({
       harness: thread.harness,
       threadId: thread.id,
     });
-    return { ...thread, willAutoCompact };
+    return { ...thread, autoCompactCause };
   }
 
   /** Stop on a parent agent's behalf: interrupt the live turn, then mark stopped, dismissing the questionnaire that interruption retains. */

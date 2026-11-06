@@ -124,7 +124,7 @@ export default class WorkbenchTurnRuntimeFeature {
           `${key}: auto-compact latest turn`);
         return { latestTurn, status: threadPayloadStatus(entry), turnLive: await turnLiveness.read(target.threadId, target.harness) };
       },
-      publish: (target, willAutoCompact) => this.publish(target.threadId, { willAutoCompact }),
+      publish: (target, autoCompactCause) => this.publish(target.threadId, { autoCompactCause }),
       prefixStale: threadId => ports.prefixes.prefixStale(threadId),
       knownPrefixStale: threadId => ports.prefixes.knownPrefixStale(threadId),
       now: Date.now,
@@ -192,16 +192,14 @@ export default class WorkbenchTurnRuntimeFeature {
         const entry = await lookup.requireThreadState().controller.getCanonicalThreadEntry(identity.projectId, identity.threadId);
         return entry && entry.entryKind !== "draft" ? { projectId: identity.projectId, lifecycle: entry.lifecycle } : null;
       },
-      canonicalTurnId: reference => identities.knownTurn(TurnReferenceSchema.parse(reference)).turnId,
       interrupt: async (harness, threadId) => { await lookup.provider(harness).threads.interrupt(threadId); },
       admitHiddenTurn: async (harness, turn) => await providers().admitHiddenTurn(installedProvider(harness), turn),
       reportFailed: async (projectId, harness, threadId) => await lookup.requireThreadState().controller.reportRecoveryFailed(projectId, harness, threadId),
       log: context.logTurnRecovery,
     });
     const continuations = this.continuations;
-    const autoResumeThread = (entry: { identity: { harness: string; threadId: WorkbenchThreadId }; activityAt: number; lifecycle: WorkbenchThreadLifecycle }) => ({
-      harness: WorkbenchHarnessSchema.parse(entry.identity.harness), threadId: entry.identity.threadId,
-      activityAt: entry.activityAt, lifecycle: entry.lifecycle,
+    const autoResumeThread = (entry: { identity: { harness: string; threadId: WorkbenchThreadId }; lifecycle: WorkbenchThreadLifecycle }) => ({
+      harness: WorkbenchHarnessSchema.parse(entry.identity.harness), threadId: entry.identity.threadId, lifecycle: entry.lifecycle,
     });
     this.autoResume = new WorkbenchThreadAutoResumeController({
       readSettings: () => ports.settings.readThreadAutoResume(),
@@ -215,18 +213,21 @@ export default class WorkbenchTurnRuntimeFeature {
         return entry ? autoResumeThread(entry) : null;
       },
       readLimits: harness => ports.accountLimits().current(harness),
+      cacheExpiredBy: (threadId, at) => autoCompact.cacheExpiredBy(threadId, at),
       readTurnStatuses: async threadId => (await transcriptReader.readPage({ threadId, cursor: null })).thread.turnHistory.flatMap(turn => turn.status ?? []),
       setResumeAt: async (thread, turnId, resumeAt) => {
         const identity = await lookup.identity(thread.threadId);
         if (identity) await lookup.requireThreadState().controller.reportAutoResume(identity.projectId, thread.harness, thread.threadId, turnId, resumeAt);
       },
-      resume: async ({ harness, threadId }, turnId, onFailed) => {
+      resume: async ({ harness, threadId }, turnId, { whenCompactionDue, onHeld, onFailed }) => {
         const steers = await ports.run("threadActions", actions => actions.undeliveredUserSteers(threadId, turnId), "auto resume steers");
         continuations.autoResume(harness, { threadId, turnId }, {
           ...(steers.length ? { input: joinUserInputs(steers.map(steer => steer.input)) } : {}),
+          whenCompactionDue,
           onStarted: async () => {
             if (steers.length) await ports.run("threadActions", actions => actions.retireUserSteers(threadId, steers.map(steer => steer.itemId)), "auto resume steer retirement");
           },
+          onHeld,
           onFailed,
         });
       },
@@ -268,7 +269,7 @@ export default class WorkbenchTurnRuntimeFeature {
             return undefined;
           }
         }));
-        const willAutoCompact = await autoCompact.observeMany(entries.map((entry, index) => {
+        const autoCompactCauses = await autoCompact.observeMany(entries.map((entry, index) => {
           const harness = WorkbenchHarnessSchema.parse(entry.identity.harness);
           return {
             target: { harness, threadId: entry.identity.threadId },
@@ -280,7 +281,7 @@ export default class WorkbenchTurnRuntimeFeature {
           const { addressedFeedback, goal, networkHistory, skills, todos, tokenUsage } = facts[index]!;
           const live = turnLive[index];
           return [threadId, {
-            tokenUsage, willAutoCompact: willAutoCompact.get(threadId) ?? false,
+            tokenUsage, autoCompactCause: autoCompactCauses.get(threadId) ?? null,
             ...(live !== undefined ? { turnLive: live } : {}),
             pendingApproval: ports.readPendingApproval(threadId),
             shellQueue: ports.shells.readShellQueue(WorkbenchThreadIdSchema.parse(threadId)),

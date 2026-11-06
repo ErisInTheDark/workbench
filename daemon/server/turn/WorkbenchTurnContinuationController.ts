@@ -27,10 +27,8 @@ export interface WorkbenchTurnContinuationOptions {
   readLifecycle(harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<{
     projectId: ProjectId; lifecycle: WorkbenchThreadLifecycle;
   } | null>;
-  /** Canonical identity of a provider-reported turn. */
-  canonicalTurnId(reference: string): WorkbenchTurnId;
   interrupt(harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<void>;
-  admitHiddenTurn(harness: WorkbenchHarness, turn: WorkbenchProviderHiddenTurn): Promise<"started" | "superseded">;
+  admitHiddenTurn(harness: WorkbenchHarness, turn: WorkbenchProviderHiddenTurn): Promise<"started" | "superseded" | "held">;
   reportFailed(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<unknown>;
   log(message: string): void;
 }
@@ -38,7 +36,10 @@ export interface WorkbenchTurnContinuationOptions {
 export interface WorkbenchTurnAutoResume {
   /** Undelivered user steers when there are any; the bare resume otherwise. */
   input?: WorkbenchProviderHiddenTurn["input"];
+  whenCompactionDue: NonNullable<WorkbenchProviderHiddenTurn["whenCompactionDue"]>;
   onStarted(): Promise<void>;
+  /** A due compaction left the thread for its user: nothing compacted, nothing started. */
+  onHeld(): Promise<void>;
   /** The thread stays armed: its lifecycle still says why it stopped, so nothing is reported as failed. */
   onFailed(): void;
 }
@@ -87,7 +88,7 @@ export default class WorkbenchTurnContinuationController {
         if (signal.aborted || !current || !this.options.coordinator.shouldContinue(current.lifecycle)) return false;
         // Runtime liveness can lag the completion that scheduled this; the stored turn reopening or a newer turn cannot.
         const latest = await threads.latestTurn(target.threadId);
-        return latest?.status === "completed" && this.options.canonicalTurnId(latest.id) === target.turnId;
+        return latest?.status === "completed" && latest.id === target.turnId;
       }, { id: `unfinished:${target.turnId}`, input: createWorkbenchUnfinishedTurnInput() });
     } catch (error) {
       // Draining for reload: the thread stays in needs attention, where manual recovery remains available.
@@ -102,7 +103,7 @@ export default class WorkbenchTurnContinuationController {
       if (signal.aborted || !current || current.lifecycle.kind === "stopped") return false;
       const latest = await threads.latestTurn(target.threadId);
       // A message admitted after the interruption already resumed the agent.
-      if (!latest || this.options.canonicalTurnId(latest.id) !== target.turnId) return false;
+      if (latest?.id !== target.turnId) return false;
       if (await threads.isTurnLive(target.threadId, target.turnId)) throw new Error(`Interrupted turn ${target.turnId} did not stop.`);
       return true;
     }, { id: `refresh:${target.turnId}`, input: createWorkbenchThreadRecoveryInput() }, true);
@@ -115,11 +116,10 @@ export default class WorkbenchTurnContinuationController {
       if (signal.aborted || !current || !getWorkbenchAutoResumeCause(current.lifecycle)
         || getWorkbenchLifecycleTurnId(current.lifecycle) !== target.turnId) return false;
       const latest = await threads.latestTurn(target.threadId);
-      return Boolean(latest) && this.options.canonicalTurnId(latest!.id) === target.turnId
-        && !await threads.isTurnLive(target.threadId, target.turnId);
+      return latest?.id === target.turnId && !await threads.isTurnLive(target.threadId, target.turnId);
     }, {
       id: `auto-resume:${target.turnId}`, input: resume.input ?? createWorkbenchThreadRecoveryInput(),
-      compactWhenDue: true, onStarted: resume.onStarted, onFailed: resume.onFailed,
+      whenCompactionDue: resume.whenCompactionDue, onStarted: resume.onStarted, onHeld: resume.onHeld, onFailed: resume.onFailed,
     });
   }
 
@@ -132,7 +132,7 @@ export default class WorkbenchTurnContinuationController {
     harness: WorkbenchHarness,
     target: WorkbenchTurnContinuationTarget,
     isCurrent: (signal: AbortSignal, threads: ProviderTurnFacts) => Promise<boolean>,
-    turn: { id: string; input: WorkbenchProviderHiddenTurn["input"]; compactWhenDue?: boolean } & Partial<Omit<WorkbenchTurnAutoResume, "input">>,
+    turn: { id: string; input: WorkbenchProviderHiddenTurn["input"] } & Partial<Omit<WorkbenchTurnAutoResume, "input">>,
     interruptFirst = false,
   ) {
     const abort = new AbortController();
@@ -156,7 +156,7 @@ export default class WorkbenchTurnContinuationController {
           if (signal.aborted) return;
           const admitted = await this.options.admitHiddenTurn(harness, {
             threadId: target.threadId, clientMessageId: createWorkbenchThreadRecoveryId(turn.id), input: turn.input,
-            ...(turn.compactWhenDue ? { compactWhenDue: true } : {}),
+            ...(turn.whenCompactionDue ? { whenCompactionDue: turn.whenCompactionDue } : {}),
             isCurrent: async threads => {
               const current = !signal.aborted && await isCurrent(signal, threads) && !signal.aborted;
               if (current) task.admitting = settled.promise;
@@ -164,6 +164,7 @@ export default class WorkbenchTurnContinuationController {
             },
           });
           if (admitted === "started") await turn.onStarted?.();
+          if (admitted === "held") await turn.onHeld?.();
         } catch (error) {
           if (signal.aborted) return;
           this.options.log(`${label} failed for ${harness}:${target.threadId}: ${message(error)}`);

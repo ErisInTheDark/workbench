@@ -118,6 +118,7 @@ const databaseReleases = Object.freeze({
   threadInstructionPrefixes: release(108, "20c7a314d7fe5ae984a4a2808b9c759887ea3b4f3eb1d163177b3da7d7353ace"),
   threadAutoCompactProviders: release(109, "e847e021a6bba7c31e3474e277757a8ee245c80b135cca5fb185796219af223a"),
   threadAutoResume: release(110, "dbe9ec9532ed391844376ff1cc5bf631aadaea85eda5f5121b1be28168a40000"),
+  threadAutoResumeExpiredCache: release(111, "198a264ac06859a5b3915b46ece46cc9d71639e7baaa2dae860ec457556917bc"),
 });
 
 export default databaseReleases;

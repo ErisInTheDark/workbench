@@ -18,6 +18,7 @@ import type {
   WorkbenchSubagentSummary, WorkbenchSubmitUserInputRequestOptions, WorkbenchUserInputResponse,
 } from "workbench-shared/types";
 import type { WorkbenchUserInput as UserInput } from "workbench-shared/workbench/provider/provider-input";
+import type { ThreadAutoCompactCause } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type { WorkbenchRateLimitSnapshot } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchApprovalOutcomeEntry } from "workbench-shared/workbench/provider/provider-approval";
 import type { ThreadTokenUsage } from "workbench-shared/workbench/thread/thread-context-usage";
@@ -55,7 +56,7 @@ interface ThreadHeadFields {
   agentPath: string | null;
   tokenUsage: ThreadTokenUsage | null;
   contextWindowTokens?: number | null;
-  willAutoCompact?: boolean;
+  autoCompactCause?: ThreadAutoCompactCause | null;
   /** Whether the provider runs the latest turn; a held questionnaire's thread waits on input without one. Absent from older daemons. */
   turnLive?: boolean;
   /** The user-set Workbench goal; drafts have none. */

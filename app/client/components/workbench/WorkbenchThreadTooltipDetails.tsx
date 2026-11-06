@@ -135,7 +135,7 @@ export default function WorkbenchThreadTooltipDetails({
                 onSubmit={async (response, options) => {
                   await questionnaire.submit(response, options);
                 }}
-                willAutoCompact={Boolean(thread.head?.willAutoCompact)}
+                autoCompactCause={thread.head?.autoCompactCause ?? null}
                 presentation="compact"
                 request={pendingRequest.request}
                 spellCheck={settings.get("composerSpellCheck")}

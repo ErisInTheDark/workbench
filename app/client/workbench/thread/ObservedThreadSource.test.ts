@@ -124,11 +124,11 @@ test("snooze routes ordinary work and request-fenced questions without changing 
 test("the thread head shows the goal and active skills its observation runtime carries", () => {
   const goal = { objective: "ship the port", updatedAt: 3 };
   const skills = [{ path: "skills/react/SKILL.md", name: "react", source: "user" as const, activatedAt: 1 }];
-  const f = fixture({ [threadId]: { tokenUsage: null, willAutoCompact: null, goal, skills } });
+  const f = fixture({ [threadId]: { tokenUsage: null, autoCompactCause: null, goal, skills } });
   assert.deepEqual(f.published.summary?.head?.goal, goal);
   assert.deepEqual(f.published.summary?.head?.skills, skills);
   f.release();
-  const bare = fixture({ [threadId]: { tokenUsage: null, willAutoCompact: null } });
+  const bare = fixture({ [threadId]: { tokenUsage: null, autoCompactCause: null } });
   assert.equal(bare.published.summary?.head?.goal, null, "a daemon without goals shows none");
   assert.deepEqual(bare.published.summary?.head?.skills, []);
   bare.release();
@@ -162,7 +162,7 @@ test("only a working thread has a live turn, whatever status the provider left o
 test("a turn paused on a live approval or question stays live, while a question held after its turn ended does not", () => {
   // Ending the turn would mark its awaiting call completed, dropping it out of its command row and activity card.
   const pendingInput = { kind: "needsAttention", reason: "pendingInput", requestKey: "approval", settled: false };
-  const runtime = (turnLive: boolean) => ({ [threadId]: { tokenUsage: null, willAutoCompact: null, turnLive } });
+  const runtime = (turnLive: boolean) => ({ [threadId]: { tokenUsage: null, autoCompactCause: null, turnLive } });
   const live = fixture(runtime(true), pendingInput);
   live.publish(projection([{ id: "turn-1" }, { id: "turn-2", status: "inProgress" }]));
   assert.equal(live.published.turns?.liveTurnId, "turn-2");

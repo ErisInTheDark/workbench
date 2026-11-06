@@ -1,7 +1,7 @@
 /* Exports: none. Protect conjunctive idle compaction, message ordering, queued user messages, generation handoff, overlap and failures. */
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { THREAD_AUTO_COMPACT_DEFAULTS, type ThreadAutoCompactRules } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { THREAD_AUTO_COMPACT_DEFAULTS, type ThreadAutoCompactCause, type ThreadAutoCompactRules } from "workbench-shared/workbench/settings/thread-auto-compact";
 import type { ThreadPayload } from "workbench-shared/types";
 import type { Turn } from "workbench-shared/workbench/thread/workbench-thread-turn";
 import type WorkbenchProvider from "../providers/WorkbenchProvider";
@@ -41,7 +41,7 @@ function fixture() {
   let latest: Turn | null = { id: "turn", status: "interrupted" } as Turn;
   let compact = async () => { calls.push("compact"); };
   const calls: string[] = [];
-  const publications: boolean[] = [];
+  const publications: Array<ThreadAutoCompactCause | null> = [];
   const scheduled: Array<{ callback: () => void; delayMs: number }> = [];
   let settingsReads = 0;
   let publicationListener = () => {};
@@ -58,8 +58,8 @@ function fixture() {
       status: status(),
       turnLive: active || nativeActive,
     }),
-    publish: (_target, willAutoCompact) => {
-      publications.push(willAutoCompact);
+    publish: (_target, cause) => {
+      publications.push(cause);
       publicationListener();
     },
     schedule: (callback, delayMs) => {
@@ -124,7 +124,7 @@ test("a turn that ends over the turn-end threshold compacts before the next mess
   const f = fixture();
   f.latest("completed");
   f.evidence({ activityAt: 30 * 60_000, contextTokens: 500_000 });
-  assert.equal(await f.owner.observe({ harness: "opencode", threadId: "thread" }), true, "the composer learns at once");
+  assert.equal(await f.owner.observe({ harness: "opencode", threadId: "thread" }), "tooMuchContext", "the composer learns at once");
   assert.equal(await f.owner.run("thread", f.provider, f.admit), "started");
   assert.deepEqual(f.calls, ["compact", "admit"]);
   assert.equal(f.prefix.exactChecks, 0, "a due turn-end needs no prefix rebuild");
@@ -148,9 +148,9 @@ test("a provider without an idle rule compacts only over its turn-end threshold,
 test("a stale prefix makes a recently active thread due, found exactly only by sends and remembered for observation", async () => {
   const f = fixture();
   f.evidence({ activityAt: 29 * 60_000, contextTokens: 200_000 });
-  assert.equal(await f.owner.observe({ harness: "claude", threadId: "thread" }), false);
+  assert.equal(await f.owner.observe({ harness: "claude", threadId: "thread" }), null);
   f.prefix.stale = true;
-  assert.equal(await f.owner.observe({ harness: "claude", threadId: "thread" }), false, "observation never rebuilds");
+  assert.equal(await f.owner.observe({ harness: "claude", threadId: "thread" }), null, "observation never rebuilds");
   assert.equal(f.prefix.exactChecks, 0);
   assert.equal(await f.owner.run("thread", f.provider, f.admit), "started");
   assert.deepEqual(f.calls, ["compact", "admit"], "the send checked exactly and compacted first");
@@ -169,7 +169,7 @@ test("a stale prefix makes a recently active thread due, found exactly only by s
 test("a send that expected no compaction bounces undelivered and the thread starts reporting it; expected or unstated sends compact", async () => {
   const bounced = fixture();
   bounced.evidence({ activityAt: 29 * 60_000, contextTokens: 200_000 });
-  assert.equal(await bounced.owner.observe({ harness: "claude", threadId: "thread" }), false);
+  assert.equal(await bounced.owner.observe({ harness: "claude", threadId: "thread" }), null);
   bounced.prefix.stale = true;
   const delivered: string[] = [];
   const deliver: QueuedMessageDelivery = async () => {
@@ -179,7 +179,7 @@ test("a send that expected no compaction bounces undelivered and the thread star
   const message: QueuedThreadMessage = { clientMessageId: "m", input: [], intent: "continue" };
   assert.deepEqual(await bounced.owner.submit("thread", bounced.provider, message, deliver, { expectAutoCompact: false }), { kind: "autoCompactDue" });
   assert.deepEqual([bounced.calls, delivered], [[], []], "nothing compacted or delivered");
-  assert.deepEqual(bounced.publications, [true], "the composer learns compaction is due");
+  assert.deepEqual(bounced.publications, ["noCache"], "the composer learns compaction is due");
   await assert.rejects(bounced.owner.run("thread", bounced.provider, bounced.admit, { expectAutoCompact: false }), { name: "AutoCompactDueError" });
   assert.deepEqual(bounced.calls, []);
   assert.equal(await bounced.owner.run("thread", bounced.provider, bounced.admit, { expectAutoCompact: true }), "started");
@@ -194,7 +194,7 @@ test("a send that expected no compaction bounces undelivered and the thread star
 
 test("a holding send keeps a due thread uncompacted and returns its hold inside admission; a thread not due admits", async () => {
   const due = fixture();
-  assert.equal(await due.owner.observe({ harness: "opencode", threadId: "thread" }), true);
+  assert.equal(await due.owner.observe({ harness: "opencode", threadId: "thread" }), "noCache");
   const hold = async () => { due.calls.push("hold"); return "held"; };
   assert.equal(await due.owner.run("thread", due.provider, due.admit, { hold }), "held");
   assert.deepEqual(due.calls, ["hold"], "nothing compacted or admitted");
@@ -209,10 +209,51 @@ test("a holding send keeps a due thread uncompacted and returns its hold inside 
   await idle.owner.dispose();
 });
 
+test("an admission choosing by cause compacts, admits or holds what its cause says, and finds a changed prefix exactly", async () => {
+  const hold = async () => "held";
+  const cold = fixture();
+  assert.equal(await cold.owner.run("thread", cold.provider, cold.admit, { hold, whenDue: () => "compact" }), "started");
+  assert.deepEqual(cold.calls, ["compact", "admit"], "choosing compact wins over having a hold");
+  await cold.owner.dispose();
+
+  const big = fixture();
+  big.evidence({ activityAt: 30 * 60_000, contextTokens: 500_000 });
+  const causes: ThreadAutoCompactCause[] = [];
+  assert.equal(await big.owner.run("thread", big.provider, big.admit, { hold, whenDue: cause => { causes.push(cause); return "admit"; } }), "started");
+  assert.deepEqual([causes, big.calls], [["tooMuchContext"], ["admit"]], "goes straight in without compacting");
+  await big.owner.dispose();
+
+  const waiting = fixture();
+  assert.equal(await waiting.owner.run("thread", waiting.provider, waiting.admit, { hold, whenDue: () => "hold" }), "held");
+  assert.deepEqual(waiting.calls, [], "nothing compacted or admitted");
+  await waiting.owner.dispose();
+
+  const stale = fixture();
+  stale.evidence({ activityAt: 30 * 60_000, contextTokens: 500_000 });
+  stale.prefix.stale = true;
+  const seen: ThreadAutoCompactCause[] = [];
+  await stale.owner.run("thread", stale.provider, stale.admit, { whenDue: cause => { seen.push(cause); return "admit"; } });
+  assert.deepEqual(seen, ["noCache"], "a big thread whose prefix changed is cold, though it was already due for size");
+  await stale.owner.dispose();
+});
+
+test("a big thread's reported cause turns to expired cache when its cache runs out", async () => {
+  const f = fixture();
+  f.evidence({ activityAt: 30 * 60_000, contextTokens: 500_000 });
+  assert.equal(await f.owner.observe({ harness: "opencode", threadId: "thread" }), "tooMuchContext");
+  const published = Promise.withResolvers<void>();
+  f.onPublication(() => published.resolve());
+  f.now(60 * 60_000);
+  f.scheduled.shift()?.callback();
+  await published.promise;
+  assert.deepEqual(f.publications, ["noCache"]);
+  await f.owner.dispose();
+});
+
 test("a held questionnaire compacts before its answer, while a live one stays ineligible", async () => {
   const held = fixture();
   held.waitingOnInput();
-  assert.equal(await held.owner.observe({ harness: "claude", threadId: "thread" }), true);
+  assert.equal(await held.owner.observe({ harness: "claude", threadId: "thread" }), "noCache");
   assert.equal(await held.owner.run("thread", held.provider, held.admit), "started");
   assert.deepEqual(held.calls, ["compact", "admit"]);
   await held.owner.dispose();
@@ -220,7 +261,7 @@ test("a held questionnaire compacts before its answer, while a live one stays in
   const live = fixture();
   live.waitingOnInput();
   live.nativeActive();
-  assert.equal(await live.owner.observe({ harness: "claude", threadId: "thread" }), false);
+  assert.equal(await live.owner.observe({ harness: "claude", threadId: "thread" }), null);
   await live.owner.run("thread", live.provider, live.admit);
   assert.deepEqual(live.calls, ["admit"]);
   await live.owner.dispose();
@@ -245,7 +286,7 @@ test("observing many threads decides from supplied facts with one settings read 
     { target: { harness: "opencode", threadId: "live" }, evidence: { harness: "opencode", activityAt: 0, contextTokens: 200_000 },
       runtime: { ...settled, status: "active", turnLive: true } },
   ]);
-  assert.deepEqual(Object.fromEntries(decisions), { due: true, small: false, live: false });
+  assert.deepEqual(Object.fromEntries(decisions), { due: "noCache", small: null, live: null });
   assert.equal(settingsReads, 1);
   await owner.dispose();
 });
@@ -253,7 +294,7 @@ test("observing many threads decides from supplied facts with one settings read 
 test("observed thread publishes when its daemon-owned idle deadline becomes due", async () => {
   const f = fixture();
   f.now(29 * 60_000);
-  assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), false);
+  assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), null);
   assert.equal(f.scheduled.length, 1);
   assert.deepEqual(f.publications, []);
 
@@ -263,7 +304,7 @@ test("observed thread publishes when its daemon-owned idle deadline becomes due"
   f.scheduled.shift()?.callback();
   await published.promise;
 
-  assert.deepEqual(f.publications, [true]);
+  assert.deepEqual(f.publications, ["noCache"]);
   assert.equal(f.scheduled.length, 0);
   await f.owner.dispose();
 });
@@ -271,7 +312,7 @@ test("observed thread publishes when its daemon-owned idle deadline becomes due"
 test("observed status replaces its deadline and fences a cancelled callback", async () => {
   const f = fixture();
   f.now(10 * 60_000);
-  assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), false);
+  assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), null);
   const cancelled = f.scheduled[0]!;
   assert.equal(cancelled.delayMs, 20 * 60_000);
 
@@ -288,7 +329,7 @@ test("observed status replaces its deadline and fences a cancelled callback", as
   f.now(40 * 60_000);
   f.scheduled.shift()?.callback();
   await published.promise;
-  assert.deepEqual(f.publications, [true]);
+  assert.deepEqual(f.publications, ["noCache"]);
   await f.owner.dispose();
 });
 
@@ -300,7 +341,7 @@ test("observed active, natively live and turnless threads remain ineligible", as
   ]) {
     const f = fixture();
     configure(f);
-    assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), false);
+    assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), null);
     assert.deepEqual(f.publications, []);
     await f.owner.dispose();
   }
@@ -309,7 +350,7 @@ test("observed active, natively live and turnless threads remain ineligible", as
 test("disposing observed status cancels its deadline", async () => {
   const f = fixture();
   f.now(29 * 60_000);
-  assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), false);
+  assert.equal(await f.owner.observe({ harness: "codex", threadId: "thread" }), null);
   assert.equal(f.scheduled.length, 1);
   await f.owner.dispose();
   assert.equal(f.scheduled.length, 0);

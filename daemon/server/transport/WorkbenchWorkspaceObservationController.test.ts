@@ -551,7 +551,7 @@ test("identity admission during a pending lookup is visible even if that lookup 
 test("a thread family's runtime is one batched read, and releasing during it publishes nothing", async context => {
   const entries = [thread(0), thread(1), thread(2)];
   const firstRead = Promise.withResolvers<void>();
-  const heldRuntime = Promise.withResolvers<ReadonlyMap<string, { tokenUsage: null; willAutoCompact: null }>>();
+  const heldRuntime = Promise.withResolvers<ReadonlyMap<string, { tokenUsage: null; autoCompactCause: null }>>();
   const runtimeReads: string[][] = [];
   const f = fixture(context, { runtime: {
     readMany: async requested => {

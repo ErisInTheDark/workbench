@@ -59,7 +59,7 @@ function renderLifecycleEnding(lifecycle: WorkbenchThreadLifecycle | null) {
     const resume = lifecycle.resumeAt === undefined ? "" : ` Usage limit reached; Workbench resumes this subagent by itself around ${new Date(lifecycle.resumeAt).toLocaleString()}.`;
     return `Thread error: ${lifecycle.error}${resume}`;
   }
-  return lifecycle.reason === "interrupted" ? "Turn was interrupted. Unless it had been idle a while, Workbench resumes this subagent by itself shortly." : "";
+  return lifecycle.reason === "interrupted" ? "Turn was interrupted. Unless its cache expired while auto resume is set to wait, Workbench resumes this subagent by itself shortly." : "";
 }
 
 export function renderSubagentTurnOutput(thread: { turns: Turn[] }, lifecycle: WorkbenchThreadLifecycle | null) {

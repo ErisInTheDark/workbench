@@ -51,7 +51,7 @@ function fixture(providerWarning?: string) {
       release: async threadId => { releases.push(`${threadId}:${stopOrder.join(",")}`); },
     },
     autoCompact: {
-      observe: async () => true,
+      observe: async () => "noCache",
       submit: async (_threadId, _provider, message, deliver, options) => deliver(message, options ?? {}),
       adopt: unused,
     },
@@ -230,7 +230,7 @@ test("canonical page reads do not require an available provider", async () => {
   ] });
   assert.deepEqual(await f.controller.handle("thread/page/read", { threadId: "wb-thread", cursor: null }), {
     ...page,
-    thread: { ...page.thread, willAutoCompact: true },
+    thread: { ...page.thread, autoCompactCause: "noCache" },
   });
   assert.deepEqual(reads, ["wb-thread"]);
 });

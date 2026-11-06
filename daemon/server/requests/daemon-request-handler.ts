@@ -53,6 +53,7 @@ export type InstallationUpdatePort = Pick<import("../runtime/WorkbenchInstallati
 
 export interface WorkbenchDaemonRequestOwners {
   autoCompact?: Pick<WorkbenchThreadAutoCompactController, "refreshObserved">;
+  autoResume?: Pick<import("../turn/WorkbenchThreadAutoResumeController").default, "start">;
   commandApprovals?: Pick<import("../interactions/WorkbenchCommandApprovalController").default, "list" | "remove" | "patch">;
   approvalReview?: Pick<import("../approval-review/WorkbenchApprovalReviewController").default, "read" | "update">;
   mcpServers?: Pick<import("../mcp-servers/WorkbenchMcpServerController").default, "read" | "update" | "readEnv" | "updateEnv" | "startSignIn" | "finishSignIn">;

@@ -95,7 +95,7 @@ function headOf(entry: ThreadEntry, runtime: ThreadRuntime | undefined, cwd: str
     serviceTier: settings?.serviceTier ?? null, agentPath: settings?.agentPath ?? null,
     contextWindowTokens: settings?.contextWindowTokens ?? null,
     tokenUsage: runtime?.tokenUsage ?? null,
-    ...(runtime?.willAutoCompact != null ? { willAutoCompact: runtime.willAutoCompact } : {}),
+    autoCompactCause: runtime?.autoCompactCause ?? null,
     ...(runtime?.turnLive != null ? { turnLive: runtime.turnLive } : {}),
     goal: runtime?.goal ?? null,
     skills: runtime?.skills ?? [],

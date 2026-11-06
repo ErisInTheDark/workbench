@@ -3,14 +3,15 @@
  * - AutoResumeThread: the saved facts one auto resume decision reads.
  * - countEndedAlike: how many of a thread's latest turns in a row ended this way.
  * - default WorkbenchThreadAutoResumeController: own when threads auto resume: attribute failed turns to usage limits by the provider's
- *   word or its account's cap, wait for quota, spread resumes out, re-gate a provider when one fails on the limit again, and skip threads
- *   idle past the threshold. The thread's lifecycle is the durable arm, so this only holds timing, rebuilt each generation.
+ *   word or its account's cap, wait for quota, spread resumes out, re-gate a provider when one fails on the limit again, and apply the
+ *   expired-cache setting. The thread's lifecycle is the durable arm, so this only holds timing, rebuilt each generation.
  */
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
 import { WorkbenchAccountLimits } from "workbench-shared/workbench/provider/provider-account";
 import type { WorkbenchProviderObservation } from "workbench-shared/workbench/provider/provider-observation";
-import type { ThreadAutoResumeSettings } from "workbench-shared/workbench/settings/thread-auto-resume";
+import type { ThreadAutoCompactAction, ThreadAutoCompactCause } from "workbench-shared/workbench/settings/thread-auto-compact";
+import { ThreadAutoResumeRules, type ThreadAutoResumeSettings } from "workbench-shared/workbench/settings/thread-auto-resume";
 import {
   getWorkbenchAutoResumeCause, getWorkbenchLifecycleTurnId, type WorkbenchThreadLifecycle,
 } from "workbench-shared/workbench/thread/thread-state";
@@ -18,7 +19,6 @@ import {
 export interface AutoResumeThread {
   harness: WorkbenchHarness;
   threadId: WorkbenchThreadId;
-  activityAt: number;
   lifecycle: WorkbenchThreadLifecycle;
 }
 
@@ -69,8 +69,14 @@ export default class WorkbenchThreadAutoResumeController {
     readTurnStatuses(threadId: WorkbenchThreadId): Promise<readonly string[]>;
     /** Saves when this failed turn resumes, or null to leave it a plain thread error. */
     setResumeAt(thread: AutoResumeThread, turnId: WorkbenchTurnId, resumeAt: number | null): Promise<void>;
-    /** Starts the resume; `onFailed` means it never ran. Throws only when not scheduled. */
-    resume(thread: AutoResumeThread, turnId: WorkbenchTurnId, onFailed: () => void): Promise<void>;
+    /** Whether this thread's cache will have expired by then, going by its size and activity now. */
+    cacheExpiredBy(threadId: WorkbenchThreadId, at: number): Promise<boolean>;
+    /** Starts the resume; `onFailed` means it never ran, `onHeld` that a due compaction left it for the user. Throws only when not scheduled. */
+    resume(thread: AutoResumeThread, turnId: WorkbenchTurnId, outcome: {
+      whenCompactionDue: (cause: ThreadAutoCompactCause) => ThreadAutoCompactAction;
+      onHeld(): Promise<void>;
+      onFailed(): void;
+    }): Promise<void>;
     schedule?(callback: () => void, delayMs: number): unknown;
     cancel?(timer: unknown): void;
     now(): number;
@@ -133,7 +139,8 @@ export default class WorkbenchThreadAutoResumeController {
   private async arm(
     threadId: WorkbenchThreadId, turnId: WorkbenchTurnId, status: "failed" | "interrupted", signal: { resumeAt: number | null } | undefined,
   ) {
-    if (!(await this.ports.readSettings()).enabled) return;
+    const settings = await this.ports.readSettings();
+    if (!settings.enabled) return;
     const thread = await this.ports.readThread(threadId);
     // A held question keeps its lifecycle through a turn's end, so that thread never reads as armed or failed here.
     if (!thread || getWorkbenchLifecycleTurnId(thread.lifecycle) !== turnId) return;
@@ -151,9 +158,11 @@ export default class WorkbenchThreadAutoResumeController {
     if (!signal && !cap) return;
     const now = this.ports.now();
     const resumeAt = signal?.resumeAt ?? cap?.resumeAt ?? now + Math.min(RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1), RETRY_MAX_MS);
+    this.gate(thread.harness, resumeAt);
+    // Waiting for its user after the reset, this thread must never promise a time it will not keep.
+    if (settings.expiredCache === "wait" && await this.ports.cacheExpiredBy(threadId, resumeAt + RESET_GRACE_MS)) return;
     await this.ports.setResumeAt(thread, turnId, resumeAt);
     if (this.retired) return;
-    this.gate(thread.harness, resumeAt);
     this.track(thread, resumeAt + RESET_GRACE_MS);
     this.kick();
   }
@@ -173,42 +182,41 @@ export default class WorkbenchThreadAutoResumeController {
     if (this.timer !== null) this.cancel(this.timer);
     this.timer = null;
     this.passing = true;
-    void this.pass().catch(error => this.ports.warn(`Auto resume pass failed: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`))
-      .finally(() => {
-        this.passing = false;
-        if (this.passAgain) { this.passAgain = false; this.kick(); } else this.scheduleNext();
-      });
+    let failed = false;
+    void this.pass().catch(error => {
+      failed = true;
+      this.ports.warn(`Auto resume pass failed: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`);
+    }).finally(() => {
+      this.passing = false;
+      if (this.passAgain) { this.passAgain = false; this.kick(); } else this.scheduleNext(failed ? RESUME_SPACING_MS : 0);
+    });
   }
 
   private earliest(tracked: Tracked) {
     return Math.max(tracked.dueAt, (this.gates.get(tracked.harness) ?? -Infinity) + RESET_GRACE_MS, (this.lastResumeAt.get(tracked.harness) ?? -Infinity) + RESUME_SPACING_MS);
   }
 
-  private scheduleNext() {
+  private scheduleNext(minimumDelayMs: number) {
     if (this.retired || !this.tracked.size) return;
     const next = Math.min(...[...this.tracked.values()].map(tracked => this.earliest(tracked)));
-    this.timer = this.schedule(() => { this.timer = null; this.kick(); }, Math.max(0, Math.min(next - this.ports.now(), MAX_TIMER_MS)));
+    this.timer = this.schedule(() => { this.timer = null; this.kick(); }, Math.max(minimumDelayMs, Math.min(next - this.ports.now(), MAX_TIMER_MS)));
   }
 
   private async pass() {
     const settings = await this.ports.readSettings();
-    const idleMs = settings.idleMinutes * 60_000;
     for (const tracked of [...this.tracked.values()].sort((left, right) => left.dueAt - right.dueAt)) {
       if (this.retired) return;
       const thread = await this.ports.readThread(tracked.threadId);
       const cause = thread && getWorkbenchAutoResumeCause(thread.lifecycle);
       const turnId = thread && getWorkbenchLifecycleTurnId(thread.lifecycle);
       if (!thread || !cause || !turnId) { this.tracked.delete(tracked.threadId); continue; }
-      let resumeAt = this.resumeAt(thread);
       // A peer failed on the limit after this was scheduled, so this thread's saved time was too early.
+      const resumeAt = this.resumeAt(thread);
       const gate = this.gates.get(tracked.harness);
       if (cause === "usageLimit" && gate !== undefined && resumeAt !== null && resumeAt < gate) {
         await this.ports.setResumeAt(thread, turnId, gate);
-        resumeAt = gate;
       }
-      // Waiting on quota is not idling: a usage-limited thread's clock starts when quota returned.
-      const staleFrom = cause === "usageLimit" && resumeAt !== null ? resumeAt : thread.activityAt;
-      if (!settings.enabled || this.ports.now() - staleFrom > idleMs) {
+      if (!settings.enabled) {
         this.tracked.delete(tracked.threadId);
         if (cause === "usageLimit") await this.ports.setResumeAt(thread, turnId, null);
         continue;
@@ -221,11 +229,16 @@ export default class WorkbenchThreadAutoResumeController {
       if (cause === "usageLimit" && await this.moveToLaterReset(thread, turnId, tracked)) continue;
       this.tracked.delete(tracked.threadId);
       this.lastResumeAt.set(tracked.harness, this.ports.now());
-      await this.ports.resume(thread, turnId, () => {
-        // A compaction or admission failure: the lifecycle still arms this thread, so only the timing moves.
-        if (this.retired) return;
-        this.track(thread, this.ports.now() + RETRY_BASE_MS);
-        this.kick();
+      await this.ports.resume(thread, turnId, {
+        whenCompactionDue: dueCause => ThreadAutoResumeRules.whenCompactionDue(settings, dueCause),
+        // Its promised time can no longer hold; an interrupted thread promised nothing and is asked again next generation.
+        onHeld: async () => { if (cause === "usageLimit") await this.ports.setResumeAt(thread, turnId, null); },
+        onFailed: () => {
+          // A compaction or admission failure: the lifecycle still arms this thread, so only the timing moves.
+          if (this.retired) return;
+          this.track(thread, this.ports.now() + RETRY_BASE_MS);
+          this.kick();
+        },
       });
     }
   }

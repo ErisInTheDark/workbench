@@ -18,6 +18,8 @@ const working: WorkbenchThreadLifecycle = {
   kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus: "working", turnId },
 };
 
+const resumeOutcome = { whenCompactionDue: () => "compact" as const, onHeld: async () => assert.fail("not held") };
+
 const completion = (status: "completed" | "interrupted" | "failed" = "completed"): WorkbenchProviderObservation => ({
   turnStarted: null, displayLabel: null, lifecycle: { threadId, event: { kind: "turnCompleted", turnId, status } },
 });
@@ -35,7 +37,6 @@ function fixture(options: {
   const owner = new WorkbenchTurnContinuationController({
     coordinator,
     readLifecycle: async () => ({ projectId, lifecycle: options.lifecycle?.() ?? unfinished }),
-    canonicalTurnId: reference => WorkbenchTurnIdSchema.parse(reference),
     interrupt: async () => { events.push("interrupt"); },
     admitHiddenTurn: options.admit ?? (async (_harness, turn) => {
       const current = await turn.isCurrent({
@@ -114,7 +115,7 @@ test("auto resume starts only over a still-armed lifecycle on its own ended turn
   ]) {
     const { owner, events, failures, idle } = fixture(variant);
     let started = 0;
-    owner.autoResume("claude", { threadId, turnId }, { onStarted: async () => { started += 1; }, onFailed: () => assert.fail("not a failure") });
+    owner.autoResume("claude", { threadId, turnId }, { ...resumeOutcome, onStarted: async () => { started += 1; }, onFailed: () => assert.fail("not a failure") });
     await idle();
     assert.deepEqual(events, []);
     assert.equal(started, 0);
@@ -123,7 +124,7 @@ test("auto resume starts only over a still-armed lifecycle on its own ended turn
   for (const lifecycle of [armed, interrupted]) {
     const { owner, events, idle } = fixture({ lifecycle: () => lifecycle });
     let started = 0;
-    owner.autoResume("claude", { threadId, turnId }, { onStarted: async () => { started += 1; }, onFailed: () => assert.fail("not a failure") });
+    owner.autoResume("claude", { threadId, turnId }, { ...resumeOutcome, onStarted: async () => { started += 1; }, onFailed: () => assert.fail("not a failure") });
     await idle();
     assert.deepEqual(events, ["resume"]);
     assert.equal(started, 1);
@@ -134,7 +135,7 @@ test("auto resume sends undelivered steers instead of the bare resume, and a fai
   const armed: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "providerFailed", settled: false, turnId, error: "limit", resumeAt: 1 };
   const steered = fixture({ lifecycle: () => armed });
   steered.owner.autoResume("claude", { threadId, turnId }, {
-    input: [{ type: "text", text: "actually do this", text_elements: [] }],
+    ...resumeOutcome, input: [{ type: "text", text: "actually do this", text_elements: [] }],
     onStarted: async () => undefined, onFailed: () => assert.fail("not a failure"),
   });
   await steered.idle();
@@ -142,10 +143,25 @@ test("auto resume sends undelivered steers instead of the bare resume, and a fai
 
   const failing = fixture({ lifecycle: () => armed, admit: async () => { throw new Error("compaction failed"); } });
   let failed = 0;
-  failing.owner.autoResume("claude", { threadId, turnId }, { onStarted: async () => assert.fail("never started"), onFailed: () => { failed += 1; } });
+  failing.owner.autoResume("claude", { threadId, turnId }, { ...resumeOutcome, onStarted: async () => assert.fail("never started"), onFailed: () => { failed += 1; } });
   await failing.idle();
   assert.equal(failed, 1);
   assert.deepEqual(failing.failures, [], "the lifecycle stays armed instead of reporting recovery failure");
+});
+
+test("auto resume hands its compaction choice to admission and reports a hold as neither started nor failed", async () => {
+  const armed: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "interrupted", settled: false, turnId };
+  const whenCompactionDue = () => "hold" as const;
+  let passed: unknown;
+  const holding = fixture({ lifecycle: () => armed, admit: async (_harness, turn) => { passed = turn.whenCompactionDue; return "held"; } });
+  let heldCalls = 0;
+  holding.owner.autoResume("claude", { threadId, turnId }, {
+    whenCompactionDue, onStarted: async () => assert.fail("never started"), onHeld: async () => { heldCalls += 1; }, onFailed: () => assert.fail("not a failure"),
+  });
+  await holding.idle();
+  assert.equal(passed, whenCompactionDue);
+  assert.equal(heldCalls, 1);
+  assert.deepEqual(holding.failures, []);
 });
 
 test("a failed hidden admission reports recovery failure once and logs it", async () => {

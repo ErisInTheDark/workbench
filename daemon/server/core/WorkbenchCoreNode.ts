@@ -412,6 +412,7 @@ function createWorkbenchCoreFeature(
   const { snapshot: projectSnapshot, search, store: projectStore, files: projectFiles } = projects;
   const daemonRequests = new WorkbenchDaemonRequestController({
     autoCompact,
+    autoResume,
     commandApprovals,
     approvalReview,
     mcpServers,

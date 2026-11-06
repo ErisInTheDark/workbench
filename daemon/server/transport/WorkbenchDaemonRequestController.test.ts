@@ -273,8 +273,8 @@ function createController(options: {
       updateThreadAutoCompact: async (provider, edit) => ({
         ...THREAD_AUTO_COMPACT_DEFAULTS, [provider]: ThreadAutoCompactRules.apply(THREAD_AUTO_COMPACT_DEFAULTS[provider], edit),
       }),
-      readThreadAutoResume: async () => ({ enabled: true, idleMinutes: 60 }),
-      updateThreadAutoResume: async edit => ({ enabled: true, idleMinutes: 60, ...edit }),
+      readThreadAutoResume: async () => ({ enabled: true, expiredCache: "compact" }),
+      updateThreadAutoResume: async edit => ({ enabled: true, expiredCache: "compact", ...edit }),
     },
   });
   return {

@@ -172,6 +172,7 @@
 
 import type { WorkbenchRateLimitSnapshot as RateLimitSnapshot } from "./workbench/provider/provider-account.ts";
 import type { WorkbenchModelOption } from "./workbench/provider/provider-model.ts";
+import type { ThreadAutoCompactCause } from "./workbench/settings/thread-auto-compact.ts";
 import type { DaemonId, DraftId, FolderId, LogicalProjectId, ProjectId, ThreadDisplayKey, WorkbenchThreadId } from "./workbench/identity.ts";
 import type { ProjectLocationReference } from "./workbench/project/project-location.ts";
 import type {
@@ -1022,7 +1023,7 @@ export interface ThreadPayloadData<Id extends string> extends ThreadSummary<Id> 
   recencyAt?: number | null;
   browseResultEntries?: WorkbenchBrowseResultEntry[];
   contextWindowTokens?: number | null;
-  willAutoCompact?: boolean;
+  autoCompactCause?: ThreadAutoCompactCause | null;
   model: string | null;
   reasoningEffort: string | null;
   serviceTier: string | null;

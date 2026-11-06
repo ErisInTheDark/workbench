@@ -12,7 +12,7 @@
 import type WorkbenchProvider from "./WorkbenchProvider";
 import type { WorkbenchProviderOperation } from "./WorkbenchProvider";
 import providerRegistrations, { type WorkbenchProviderKey } from "workbench-shared/workbench/provider/provider-registrations";
-import type { WorkbenchThreadMessage } from "workbench-shared/workbench/thread/thread-actions";
+import type { WorkbenchThreadMessage, WorkbenchThreadMessageResult } from "workbench-shared/workbench/thread/thread-actions";
 import type { WorkbenchThreadAdmissionTicket } from "../thread/WorkbenchThreadAdmissionController";
 import type WorkbenchThreadAutoCompactController from "../turn/WorkbenchThreadAutoCompactController";
 import type { AutoCompactRunOptions } from "../turn/WorkbenchThreadAutoCompactController";
@@ -34,8 +34,8 @@ export interface WorkbenchProviderHiddenTurn {
   threadId: string;
   clientMessageId: string;
   input: WorkbenchUserInput[];
-  /** Compact first when due, as a user message would. Otherwise the turn never compacts. */
-  compactWhenDue?: boolean;
+  /** What a due compaction does to this turn; absent, the turn never compacts. */
+  whenCompactionDue?: AutoCompactRunOptions<never>["whenDue"];
   /** Runs inside the thread's admission lane, after every earlier admission; false skips the turn. */
   isCurrent(threads: Pick<WorkbenchProvider["threads"], "latestTurn" | "isTurnLive">): Promise<boolean>;
 }
@@ -256,15 +256,18 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
   }
 
   /** Start a Workbench-owned hidden turn with the thread's selection, unless newer work superseded it in the lane. */
-  async admitHiddenTurn(turn: WorkbenchProviderHiddenTurn): Promise<"started" | "superseded"> {
-    const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage(turn.threadId, provider, async () => {
+  async admitHiddenTurn(turn: WorkbenchProviderHiddenTurn): Promise<"started" | "superseded" | "held"> {
+    const result = await this.run(providerRegistrations[this.key], provider => this.admitMessage<WorkbenchThreadMessageResult | null | "held">(turn.threadId, provider, async () => {
       if (!await turn.isCurrent(provider.threads)) return null;
       return await this.withSelection(turn.threadId, undefined, context => provider.threads.submit({
         threadId: turn.threadId, clientMessageId: turn.clientMessageId, input: turn.input, intent: "newTurn",
         ...(context ? { context } : {}),
       }));
-    }, { skipAutoCompact: !turn.compactWhenDue }), `${this.key}: threads.admitHiddenTurn`);
+    }, turn.whenCompactionDue
+      ? { whenDue: turn.whenCompactionDue, hold: async () => "held" }
+      : { skipAutoCompact: true }), `${this.key}: threads.admitHiddenTurn`);
     if (!result) return "superseded";
+    if (result === "held") return "held";
     this.admitted(turn.threadId, result);
     try {
       await this.publishMessageAdmission(turn.threadId, {

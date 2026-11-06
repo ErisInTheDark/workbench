@@ -6,6 +6,7 @@
 "use client";
 
 import type { ComponentType } from "react";
+import type { ThreadAutoCompactCause } from "workbench-shared/workbench/settings/thread-auto-compact";
 import PressDragMenu, { type PressDragMenuItem } from "../../ui/PressDragMenu";
 import PrimaryButton from "../../ui/PrimaryButton";
 import { CompactIcon, SendHorizontalIcon, type IconProps } from "../workbench-icons";
@@ -23,8 +24,9 @@ function ChoiceLabel ({ choice, label, Icon }: { choice: Choice; label: string; 
 }
 
 /** `label` names the action, such as "Send" or "Resume", and `Icon` draws it; `onSend` receives whether to skip compaction. */
-export default function AutoCompactSendMenu ({ label, Icon = SendHorizontalIcon, iconSize = 20, onSend }: {
+export default function AutoCompactSendMenu ({ label, cause, Icon = SendHorizontalIcon, iconSize = 20, onSend }: {
   label: string;
+  cause: ThreadAutoCompactCause;
   Icon?: ComponentType<IconProps>;
   iconSize?: IconProps["size"];
   onSend: (skipAutoCompact: boolean) => void;
@@ -35,7 +37,7 @@ export default function AutoCompactSendMenu ({ label, Icon = SendHorizontalIcon,
   }));
 
   return <PressDragMenu
-    label={autoCompactSendLabel(label, true)}
+    label={autoCompactSendLabel(label, cause)}
     align="end"
     items={items}
     triggerAppearance="plain"
@@ -48,7 +50,7 @@ export default function AutoCompactSendMenu ({ label, Icon = SendHorizontalIcon,
   >
     <PrimaryButton.Face>
       <Icon size={iconSize} />
-      <AutoCompactSendBadge />
+      <AutoCompactSendBadge cause={cause} />
     </PrimaryButton.Face>
   </PressDragMenu>;
 }

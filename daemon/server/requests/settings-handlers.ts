@@ -133,7 +133,10 @@ export const settingsRequestHandlers = defineDaemonRequestHandlers({
   "thread-auto-resume/update": async (params, { owners }) => {
     const edit = ThreadAutoResumePatchSchema.safeParse(params);
     if (!edit.success) throw new InvalidParamsError("Invalid auto-resume settings.");
-    return { settings: await owners.settings.updateThreadAutoResume(edit.data) };
+    const settings = await owners.settings.updateThreadAutoResume(edit.data);
+    // Threads this setting had left alone are armed still, so a new choice applies to them now.
+    await owners.autoResume?.start();
+    return { settings };
   },
   "profiles/read": async (_params, { owners }) => await owners.profiles.read(),
   "profiles/target/read": async (params, context) => {

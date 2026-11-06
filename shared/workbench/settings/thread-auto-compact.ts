@@ -6,7 +6,9 @@
  * - THREAD_AUTO_COMPACT_DEFAULTS: initial per-provider rules.
  * - ThreadAutoCompactPatchSchema/ThreadAutoCompactPatch: validated partial edits to one provider's rules.
  * - ThreadAutoCompactUpdateSchema/ThreadAutoCompactUpdate: one provider's edit request.
- * - ThreadAutoCompactTiming: when a thread's rules make compaction due, and which rule did.
+ * - ThreadAutoCompactCauseSchema/ThreadAutoCompactCause: why compaction is due: the provider's cache expired, or the context is simply too large.
+ * - ThreadAutoCompactAssessment: a thread's current compaction cause, and when that answer next changes.
+ * - ThreadAutoCompactAction: what one admission does about a due compaction.
  */
 import { z } from "zod";
 import { installedProviderKeys, type WorkbenchProviderKey } from "../provider/provider-registrations.ts";
@@ -57,7 +59,13 @@ export const ThreadAutoCompactUpdateSchema = z.object({
 }).strict();
 export type ThreadAutoCompactUpdate = z.infer<typeof ThreadAutoCompactUpdateSchema>;
 
-export type ThreadAutoCompactTiming = { rule: "turnEnd" | "idle"; dueAt: number };
+export const ThreadAutoCompactCauseSchema = z.enum(["noCache", "tooMuchContext"]);
+export type ThreadAutoCompactCause = z.infer<typeof ThreadAutoCompactCauseSchema>;
+
+export type ThreadAutoCompactAssessment = { cause: ThreadAutoCompactCause | null; changesAt: number | null };
+
+/** What one admission does about a due compaction: compact first, go ahead without, or leave the thread untouched. */
+export type ThreadAutoCompactAction = "compact" | "admit" | "hold";
 
 export const ThreadAutoCompactRules = {
   /** Raising the idle threshold carries the turn-end threshold with it; idle edits on a provider without the rule are refused. */
@@ -77,11 +85,21 @@ export const ThreadAutoCompactRules = {
     });
   },
 
-  /** Null when no rule applies; an idle rule's time is when the cache would have expired anyway. */
-  timing(rules: ThreadAutoCompactRules | undefined, evidence: { activityAt: number; contextTokens: number | null }): ThreadAutoCompactTiming | null {
+  /**
+   * Why compaction is due at `now` and when that answer next changes; null when no rule applies.
+   * A thread both too big and cold counts as cold, because replaying it uncached is the costlier fact.
+   */
+  assess(
+    rules: ThreadAutoCompactRules | undefined,
+    evidence: { activityAt: number; contextTokens: number | null },
+    now: number,
+    prefixStale = false,
+  ): ThreadAutoCompactAssessment | null {
     if (!rules?.enabled || evidence.contextTokens === null) return null;
-    if (evidence.contextTokens >= rules.turnEndTokenThreshold) return { rule: "turnEnd", dueAt: evidence.activityAt };
-    if (!rules.idle || evidence.contextTokens < rules.idle.tokenThreshold) return null;
-    return { rule: "idle", dueAt: evidence.activityAt + rules.idle.minutes * 60_000 };
+    const expiresAt = rules.idle && evidence.contextTokens >= rules.idle.tokenThreshold
+      ? evidence.activityAt + rules.idle.minutes * 60_000 : null;
+    if (expiresAt !== null && (prefixStale || now >= expiresAt)) return { cause: "noCache", changesAt: null };
+    if (evidence.contextTokens >= rules.turnEndTokenThreshold) return { cause: "tooMuchContext", changesAt: expiresAt };
+    return expiresAt === null ? null : { cause: null, changesAt: expiresAt };
   },
 };

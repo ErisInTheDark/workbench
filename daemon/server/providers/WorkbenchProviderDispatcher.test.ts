@@ -543,6 +543,7 @@ test("a hidden turn checks currency after earlier admissions in its lane and sta
     instructionSelection: selection,
     messageAdmission: (threadId, _provider, admit, options) => {
       skipsCompaction.push(options?.skipAutoCompact);
+      if (threadId === "held-thread" && options?.hold) return options.hold();
       return admission.run(threadId, admit);
     },
     onMessageAdmitted: received => { admissions.push(received); },
@@ -568,9 +569,14 @@ test("a hidden turn checks currency after earlier admissions in its lane and sta
   assert.equal(admissions[1]!.firstMessagePreview, undefined);
   assert.equal(skipsCompaction.at(-1), true, "a hidden turn never compacts unless it asks to");
   await dispatcher.admitHiddenTurn("claude", {
-    threadId: "thread", clientMessageId: "hidden-compacting", input: [], compactWhenDue: true, isCurrent: async () => current,
+    threadId: "thread", clientMessageId: "hidden-compacting", input: [], whenCompactionDue: () => "compact", isCurrent: async () => current,
   });
-  assert.equal(skipsCompaction.at(-1), false);
+  assert.notEqual(skipsCompaction.at(-1), true);
+  const admittedBefore = admissions.length;
+  assert.equal(await dispatcher.admitHiddenTurn("claude", {
+    threadId: "held-thread", clientMessageId: "hidden-held", input: [], whenCompactionDue: () => "hold", isCurrent: async () => assert.fail("a held turn is never checked"),
+  }), "held");
+  assert.equal(admissions.length, admittedBefore, "a held turn publishes no admission");
   await admission.dispose();
 });
 

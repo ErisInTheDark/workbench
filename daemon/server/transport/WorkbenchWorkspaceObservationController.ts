@@ -866,7 +866,7 @@ export default class WorkbenchWorkspaceObservationController<Client extends obje
     const read = unread.length ? await this.readRuntime(unread) : new Map<string, ThreadRuntime>();
     // A thread the batch could not read keeps an empty runtime, so it is not reread on every publication.
     return Object.fromEntries(threads.map(({ identity: { threadId } }) => [threadId,
-      previous[threadId] ?? read.get(threadId) ?? { tokenUsage: null, willAutoCompact: null }]));
+      previous[threadId] ?? read.get(threadId) ?? { tokenUsage: null, autoCompactCause: null }]));
   }
 
   private async readRuntime(entries: readonly Exclude<WorkbenchThreadSidebarEntry, { entryKind: "draft" }>[]): Promise<ReadonlyMap<string, ThreadRuntime>> {

@@ -44,6 +44,7 @@ import { renderThreadInlineMarkdown } from "./thread-markdown-render";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
 import { useNonTextInputShiftKey } from "../use-non-text-input-shift-key";
+import type { ThreadAutoCompactCause } from "workbench-shared/workbench/settings/thread-auto-compact";
 import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBadge";
 import AutoCompactSendMenu from "./AutoCompactSendMenu";
 import { getQuestionnaireEnterAction } from "./thread-composer-controls";
@@ -103,7 +104,7 @@ type InteractiveThreadUserInputRequestProps = {
   /** Host action row that receives the full layout's submit control instead of an inline row. */
   submitTarget?: HTMLElement | null;
   /** The thread compacts before an answer that starts a turn; shift-submitting skips it. */
-  willAutoCompact?: boolean;
+  autoCompactCause?: ThreadAutoCompactCause | null;
   /** Enter is being held to confirm a compact-first answer; a host taking this shows the progress, otherwise submit does. */
   onCompactSendHoldChange?: (holding: boolean) => void;
 };
@@ -264,7 +265,8 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
   const error = localError || editing.error;
   const { isSubmitting, isAttaching } = editing;
   const isShiftPressed = useNonTextInputShiftKey({ allowWhileTextInputFocused: true });
-  const willAutoCompactOnSubmit = Boolean(interactiveProps?.willAutoCompact) && !isShiftPressed;
+  const submitCompactCause = isShiftPressed ? null : interactiveProps?.autoCompactCause ?? null;
+  const willAutoCompactOnSubmit = Boolean(submitCompactCause);
   const compactSubmitHold = useCompactSendHold(
     willAutoCompactOnSubmit && !isSubmitting && !isAttaching, interactiveProps?.onCompactSendHoldChange);
   const isMobileTextInput = useMobileTextInputEnvironment();
@@ -308,7 +310,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
         ...(supplementalInput.length ? { supplementalInput } : {}),
         // Always claimed, even when empty, so the daemon can check them against its own skill catalog.
         activatedSkillPaths,
-        ...(skipAutoCompact ? { skipAutoCompact: true } : { expectAutoCompact: Boolean(interactiveProps.willAutoCompact) }),
+        ...(skipAutoCompact ? { skipAutoCompact: true } : { expectAutoCompact: Boolean(interactiveProps.autoCompactCause) }),
       });
     }, interactiveProps.onDraftClear);
   };
@@ -380,11 +382,10 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
     if (event.key === "Enter" && compactSubmitHold.release(event.timeStamp)) void handleSubmit(false);
   };
   const submitLabel = isSubmitting ? "Submitting..." : isAttaching ? "Attaching..."
-    : autoCompactSendLabel("Submit", willAutoCompactOnSubmit);
-  const showsCompactSubmitMenu = willAutoCompactOnSubmit && isMobileTextInput && !isSubmitting && !isAttaching;
-  const renderSubmitButton = () => showsCompactSubmitMenu ? (
+    : autoCompactSendLabel("Submit", submitCompactCause);
+  const renderSubmitButton = () => submitCompactCause && isMobileTextInput && !isSubmitting && !isAttaching ? (
     <span className="justify-self-end" data-thread-questionnaire-submit="true">
-      <AutoCompactSendMenu label="Submit" onSend={skipAutoCompact => { void handleSubmit(skipAutoCompact); }} />
+      <AutoCompactSendMenu label="Submit" cause={submitCompactCause} onSend={skipAutoCompact => { void handleSubmit(skipAutoCompact); }} />
     </span>
   ) : (
     <PrimaryButton
@@ -403,7 +404,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
         ? undefined : { holding: compactSubmitHold.holding, durationMs: COMPACT_SEND_HOLD_MS }}
     >
       <SendHorizontalIcon size={20} />
-      {willAutoCompactOnSubmit && !isSubmitting && !isAttaching ? <AutoCompactSendBadge /> : null}
+      {submitCompactCause && !isSubmitting && !isAttaching ? <AutoCompactSendBadge cause={submitCompactCause} /> : null}
     </PrimaryButton>
   );
   const lastAnswerKeyProps = {

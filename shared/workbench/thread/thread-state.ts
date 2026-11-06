@@ -59,6 +59,7 @@
 import { z } from "zod";
 import { WorkbenchReloadDirtSnapshotSchema } from "../../reload/workbench-reload.ts";
 import { ThreadTokenUsageSchema } from "./thread-context-usage.ts";
+import { ThreadAutoCompactCauseSchema } from "../settings/thread-auto-compact.ts";
 import { WorkbenchThreadGoalSchema } from "./thread-goal.ts";
 import { WorkbenchThreadTodoSchema } from "./thread-todo.ts";
 import { WorkbenchThreadAddressedFeedbackSchema } from "./thread-addressed-feedback.ts";
@@ -558,7 +559,8 @@ export type WorkbenchBackgroundShell = z.infer<typeof WorkbenchBackgroundShellSc
 /** Live provider facts per family thread that thread state does not own; unknown keys are dropped so older browsers survive newer servers. */
 export const ThreadRuntimeSchema = z.object({
   tokenUsage: ThreadTokenUsageSchema.nullable(),
-  willAutoCompact: z.boolean().nullable(),
+  /** Why the thread's next send compacts first, null when it will not; absent from daemons that predate it. */
+  autoCompactCause: ThreadAutoCompactCauseSchema.nullable().optional(),
   /** Whether the provider runs the thread's latest turn; absent from daemons that predate it. */
   turnLive: z.boolean().optional(),
   pendingApproval: WorkbenchPendingApprovalSchema.nullable().optional(),

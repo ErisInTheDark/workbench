@@ -54,7 +54,7 @@
 | approval questionnaire | A questionnaire form shown due to an agent attempting to escalate a tool call outside the sandbox. |
 | interrupt | Ends the live turn but keeps its pending questionnaire; the thread needs attention. |
 | stop | Interrupts the live turn, dismisses its pending questionnaire and sets status to stopped. |
-| auto resume | Workbench continuing a thread after a usage-limit failure once quota returns, or after its process ended, unless idle past the threshold; the lifecycle is the arm, so any continuation or stop cancels it |
+| auto resume | Workbench continuing a thread after a usage-limit failure once quota returns, or after its process ended; the lifecycle is the arm, so any continuation or stop cancels it |
 | held questionnaire | A questionnaire form that is no longer attached to a request_user_input tool call due to an interruption; the thread is stopped, but the form remains answerable by the user. (Response admitted via normal user message) |
 | mark tag | Suggest-mode review label on words, saved as `<u data-mark="name">`; names, colours and Alt+digit order come from the `markTags` setting, global with logical-project overrides |
 | tool docs | `<docs tools="a b">` instruction regions for specific wb tools; render only when a listed tool is visible to the caller; Stats → Tools charges their tokens evenly to those tools |

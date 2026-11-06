@@ -325,16 +325,13 @@ export default function ThreadComposer ({
   });
   const hasSendableInput = Boolean(trimmedValue || attachments.length || references.length);
   const willStayInCreate = thread.isDraft && isShiftPressed && hasSendableInput && !isSendDisabled;
-  const willAutoCompactOnSend = Boolean(thread.willAutoCompact)
-    && hasSendableInput
-    && !isSendDisabled
-    && !isShiftPressed;
+  const autoCompactCause = thread.autoCompactCause ?? null;
+  const sendCompactCause = hasSendableInput && !isSendDisabled && !isShiftPressed ? autoCompactCause : null;
+  const willAutoCompactOnSend = Boolean(sendCompactCause);
   const compactSendHold = useCompactSendHold(willAutoCompactOnSend, onCompactSendHoldChange);
-  const willAutoCompactOnResume = Boolean(thread.willAutoCompact)
-    && canRecoverInterruptedTurn
-    && !isRecoveringInterruptedTurn
-    && hasEffectiveProfile
-    && !isShiftPressed;
+  const resumeCompactCause = canRecoverInterruptedTurn && !isRecoveringInterruptedTurn && hasEffectiveProfile && !isShiftPressed
+    ? autoCompactCause : null;
+  const willAutoCompactOnResume = Boolean(resumeCompactCause);
   const sendButtonLabel = isSending
     ? "Sending..."
     : isAttaching
@@ -342,7 +339,7 @@ export default function ThreadComposer ({
       : isThreadStateBroken
         ? "Unavailable"
         : willStayInCreate ? `${sendLabel} (stay in create new thread)`
-        : autoCompactSendLabel(sendLabel, willAutoCompactOnSend);
+        : autoCompactSendLabel(sendLabel, sendCompactCause);
   useEffect(() => {
     onDraftSessionChange?.(editing.session);
     return () => onDraftSessionChange?.(null);
@@ -665,10 +662,10 @@ export default function ThreadComposer ({
     </PrimaryButton>
   ) : null;
   const resumeButtonLabel = isRecoveringInterruptedTurn ? "Resuming thread"
-    : autoCompactSendLabel("Resume thread", willAutoCompactOnResume);
+    : autoCompactSendLabel("Resume thread", resumeCompactCause);
   const resumeButton = !canRecoverInterruptedTurn ? null
-    : willAutoCompactOnResume && isMobileTextInput ? (
-      <AutoCompactSendMenu label="Resume" Icon={PlayIcon} iconSize={18}
+    : resumeCompactCause && isMobileTextInput ? (
+      <AutoCompactSendMenu label="Resume" cause={resumeCompactCause} Icon={PlayIcon} iconSize={18}
         onSend={skipAutoCompact => { void recoverInterruptedTurn(skipAutoCompact); }} />
     ) : (
       <PrimaryButton
@@ -682,7 +679,7 @@ export default function ThreadComposer ({
         }}
       >
         <PlayIcon size={18} />
-        {willAutoCompactOnResume ? <AutoCompactSendBadge /> : null}
+        {resumeCompactCause ? <AutoCompactSendBadge cause={resumeCompactCause} /> : null}
       </PrimaryButton>
     );
   const questionnaireToggleButton = hasVisiblePendingUserInputRequest ? (
@@ -786,7 +783,7 @@ export default function ThreadComposer ({
                   onDraftClear={questionnaire.clear}
                   request={visiblePendingUserInputRequest.request}
                   mode="live"
-                  willAutoCompact={Boolean(thread.willAutoCompact)}
+                  autoCompactCause={autoCompactCause}
                   onCompactSendHoldChange={onCompactSendHoldChange}
                   onSubmit={async (response, options) => {
                     try {
@@ -954,8 +951,8 @@ export default function ThreadComposer ({
                     )}
                   <div className="flex shrink-0 items-center gap-2">
                     {leadingActions}
-                    {willAutoCompactOnSend && isMobileTextInput ? (
-                      <AutoCompactSendMenu label={sendLabel} onSend={skipAutoCompact => { void submit(skipAutoCompact); }} />
+                    {sendCompactCause && isMobileTextInput ? (
+                      <AutoCompactSendMenu label={sendLabel} cause={sendCompactCause} onSend={skipAutoCompact => { void submit(skipAutoCompact); }} />
                     ) : <PrimaryButton
                       type="submit"
                       onClick={event => {
@@ -969,7 +966,7 @@ export default function ThreadComposer ({
                       pendingHalo={isSending && !isLaunchingDraft || isAttaching}
                     >
                       <SendHorizontalIcon size={20} />
-                      {willAutoCompactOnSend ? <AutoCompactSendBadge /> : null}
+                      {sendCompactCause ? <AutoCompactSendBadge cause={sendCompactCause} /> : null}
                       {willStayInCreate ? <SendActionBadge><ListEndIcon size={12} /></SendActionBadge> : null}
                     </PrimaryButton>}
                     {trailingActions}

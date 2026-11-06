@@ -81,7 +81,7 @@ export default class WorkbenchServerSettings {
 
   async readThreadAutoResume(): Promise<ThreadAutoResumeSettings> {
     const [row] = await this.database.query(selectRows(threadAutoResumeSettings, { where: { id: "global" } }));
-    const stored = row && ThreadAutoResumeSettingsSchema.safeParse({ enabled: row.enabled === 1, idleMinutes: row.idle_minutes });
+    const stored = row && ThreadAutoResumeSettingsSchema.safeParse({ enabled: row.enabled === 1, expiredCache: row.expired_cache });
     return stored && stored.success ? stored.data : THREAD_AUTO_RESUME_DEFAULTS;
   }
 
@@ -91,8 +91,8 @@ export default class WorkbenchServerSettings {
     await this.enqueueWrite(async () => {
       settings = { ...await this.readThreadAutoResume(), ...edit };
       await this.database.executeTransaction([upsertRow(threadAutoResumeSettings, {
-        id: "global", enabled: settings.enabled ? 1 : 0, idle_minutes: settings.idleMinutes,
-      }, { conflictColumns: ["id"], updateColumns: ["enabled", "idle_minutes"] })]);
+        id: "global", enabled: settings.enabled ? 1 : 0, expired_cache: settings.expiredCache,
+      }, { conflictColumns: ["id"], updateColumns: ["enabled", "expired_cache"] })]);
     });
     return settings;
   }

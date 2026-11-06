@@ -4,13 +4,15 @@
  * - ThreadAutoCompactTarget: observed thread identity for status publication.
  * - ThreadAutoCompactRuntime: latest turn, status and liveness a decision weighs.
  * - AutoCompactAdmissionOptions/AutoCompactDueError: a send's compaction policy and expectation, and the bounce when it expected none.
- * - AutoCompactRunOptions: one admission's policy, held lane ticket, and hold run instead of compacting a due thread.
+ * - AutoCompactRunOptions: one admission's policy, held lane ticket, per-cause choice, and hold run instead of compacting a due thread.
  * - QueuedMessageDelivery: admit one message directly, or inside the admission whose ticket it carries.
- * - default WorkbenchThreadAutoCompactController: own observed eligibility (singly or from batched facts; turn-end, idle or stale-prefix due) and
+ * - default WorkbenchThreadAutoCompactController: own observed eligibility and its cause (singly or from batched facts; size, idle or stale-prefix due) and
  *   compact-before-message policy, including held questionnaire answers, user messages queued behind compaction, queues handed over by a
  *   retiring generation, bouncing sends that expected no compaction, and holding messages whose sender holds rather than compacts.
  */
-import { ThreadAutoCompactRules, type ThreadAutoCompactSettings } from "workbench-shared/workbench/settings/thread-auto-compact";
+import {
+  ThreadAutoCompactRules, type ThreadAutoCompactAction, type ThreadAutoCompactCause, type ThreadAutoCompactSettings,
+} from "workbench-shared/workbench/settings/thread-auto-compact";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type {
@@ -50,15 +52,18 @@ interface ThreadAutoCompactFacts {
 }
 
 interface ThreadAutoCompactDecision {
-  dueAt: number | null;
-  willAutoCompact: boolean;
+  /** When this answer next changes without anything else happening. */
+  changesAt: number | null;
+  /** Why the thread compacts now; null when it does not. */
+  cause: ThreadAutoCompactCause | null;
 }
 
 interface ObservedThread {
   revision: number;
   target: ThreadAutoCompactTarget;
   timer: unknown | null;
-  willAutoCompact: boolean | null;
+  /** Undefined until first decided. */
+  cause: ThreadAutoCompactCause | null | undefined;
 }
 
 export interface AutoCompactAdmissionOptions {
@@ -68,11 +73,12 @@ export interface AutoCompactAdmissionOptions {
 }
 
 /**
- * One admission's options: its compaction policy, the lane ticket it already holds, and `hold`, which a due thread runs
- * inside the admission instead of compacting, returning what it returns.
+ * One admission's options: its compaction policy, the lane ticket it already holds, `whenDue` choosing by cause, and `hold`,
+ * which a held thread runs inside the admission instead of compacting, returning what it returns. Without `whenDue`, `hold` holds every cause.
  */
 export type AutoCompactRunOptions<T> = AutoCompactAdmissionOptions & {
   admission?: WorkbenchThreadAdmissionTicket;
+  whenDue?: (cause: ThreadAutoCompactCause) => ThreadAutoCompactAction;
   hold?: () => Promise<T>;
 };
 
@@ -94,7 +100,7 @@ type AdmissionProvider = { threads: Pick<WorkbenchProvider["threads"], "read" | 
 export default class WorkbenchThreadAutoCompactController {
   private readonly lifetime = new AbortController();
   private readonly observed = new Map<string, ObservedThread>();
-  private readonly refreshes = new Set<Promise<boolean>>();
+  private readonly refreshes = new Set<Promise<ThreadAutoCompactCause | null>>();
   private readonly schedule: (callback: () => void, delayMs: number) => unknown;
   private readonly cancel: (timer: unknown) => void;
   hasPendingWork() { return this.refreshes.size > 0; }
@@ -105,7 +111,7 @@ export default class WorkbenchThreadAutoCompactController {
     readSettings(): Promise<ThreadAutoCompactSettings>;
     readEvidence(threadId: string): Promise<ThreadAutoCompactEvidence | null>;
     readRuntime(target: ThreadAutoCompactTarget): Promise<ThreadAutoCompactRuntime>;
-    publish(target: ThreadAutoCompactTarget, willAutoCompact: boolean): void;
+    publish(target: ThreadAutoCompactTarget, cause: ThreadAutoCompactCause | null): void;
     /** Exact: rebuilds when needed. Only sends pay for it. Absent: prefixes are never stale. */
     prefixStale?(threadId: string): Promise<boolean>;
     /** What the last exact check found; observation reads only this. */
@@ -126,7 +132,7 @@ export default class WorkbenchThreadAutoCompactController {
   /** Observe many threads from facts the caller already read: one settings read, no per-thread port reads. */
   async observeMany(entries: ReadonlyArray<{ target: ThreadAutoCompactTarget; evidence: ThreadAutoCompactEvidence | null; runtime: ThreadAutoCompactRuntime }>) {
     this.lifetime.signal.throwIfAborted();
-    if (!entries.length) return new Map<string, boolean>();
+    if (!entries.length) return new Map<string, ThreadAutoCompactCause | null>();
     const settings = await this.ports.readSettings();
     return new Map(await Promise.all(entries.map(async ({ evidence, runtime, target }) => (
       [target.threadId, await this.observeWith(target, { evidence, runtime, settings })] as const
@@ -140,7 +146,7 @@ export default class WorkbenchThreadAutoCompactController {
       revision: 0,
       target,
       timer: null,
-      willAutoCompact: null,
+      cause: undefined,
     };
     observed.target = target;
     this.observed.set(target.threadId, observed);
@@ -149,8 +155,16 @@ export default class WorkbenchThreadAutoCompactController {
     } catch (error) {
       if (this.lifetime.signal.aborted) throw error;
       this.warn(target.threadId, error);
-      return false;
+      return null;
     }
+  }
+
+  /** Whether this thread's cache will have expired by `at`, going by its size and activity now. */
+  async cacheExpiredBy(threadId: string, at: number) {
+    const [settings, evidence] = await Promise.all([this.ports.readSettings(), this.ports.readEvidence(threadId)]);
+    if (!evidence) return false;
+    const providerKey = installedProviderKeys.find(key => key === evidence.harness);
+    return ThreadAutoCompactRules.assess(providerKey ? settings[providerKey] : undefined, evidence, at)?.cause === "noCache";
   }
 
   async refreshObserved(threadIds?: readonly string[]) {
@@ -190,13 +204,15 @@ export default class WorkbenchThreadAutoCompactController {
       const signal = this.lifetime.signal;
       signal.throwIfAborted();
       await this.compaction.retireStranded(threadId);
-      const compacts = !options.skipAutoCompact && (await this.decide(threadId, provider, undefined, true)).willAutoCompact;
-      if (compacts && (options.hold || options.expectAutoCompact === false)) {
+      // Choosing by cause needs the exact answer even when the thread is already due for size.
+      const cause = options.skipAutoCompact ? null : (await this.decide(threadId, provider, undefined, options.whenDue ? "always" : "unlessDue")).cause;
+      const action = !cause ? "admit" : options.whenDue?.(cause) ?? (options.hold ? "hold" : "compact");
+      if (action === "hold" || (action === "compact" && options.expectAutoCompact === false)) {
         await this.refreshAfterAdmission(threadId, provider);
         if (options.hold) return await options.hold();
         throw new AutoCompactDueError();
       }
-      const result = compacts
+      const result = action === "compact"
         ? await this.compaction.compactInsideAdmission(threadId, provider, ticket, {
           signal, then: async () => { signal.throwIfAborted(); return await admit(); },
         }) as T
@@ -231,9 +247,9 @@ export default class WorkbenchThreadAutoCompactController {
       signal.throwIfAborted();
       await this.compaction.retireStranded(threadId);
       mark("stranded");
-      const decision = await this.decide(threadId, provider, undefined, true);
+      const decision = await this.decide(threadId, provider, undefined, "unlessDue");
       mark("decision");
-      if (!decision.willAutoCompact) {
+      if (!decision.cause) {
         queued.resolve(false);
         return;
       }
@@ -276,7 +292,7 @@ export default class WorkbenchThreadAutoCompactController {
     await this.admission.run(threadId, async ticket => {
       const signal = this.lifetime.signal;
       signal.throwIfAborted();
-      if (!remaining.compacted && (await this.decide(threadId, provider, undefined, true)).willAutoCompact) {
+      if (!remaining.compacted && (await this.decide(threadId, provider, undefined, "unlessDue")).cause) {
         // The adopted queue settles its own holds even when compaction fails, so the handoff itself succeeded.
         await this.compaction.compactInsideAdmission(threadId, provider, ticket, {
           signal, adopted: { handoff: remaining, deliver: deliverQueued },
@@ -302,7 +318,8 @@ export default class WorkbenchThreadAutoCompactController {
     threadId: string,
     provider?: { threads: Pick<WorkbenchProvider["threads"], "read" | "latestTurn" | "isTurnLive"> },
     facts?: ThreadAutoCompactFacts,
-    checkPrefix = false,
+    /** When to pay for an exact prefix check; otherwise only what the last one found counts. */
+    exactPrefix: "never" | "unlessDue" | "always" = "never",
   ): Promise<ThreadAutoCompactDecision> {
     const signal = this.lifetime.signal;
     signal.throwIfAborted();
@@ -310,14 +327,17 @@ export default class WorkbenchThreadAutoCompactController {
     const evidence = facts ? facts.evidence : await this.ports.readEvidence(threadId);
     signal.throwIfAborted();
     const providerKey = evidence && installedProviderKeys.find(key => key === evidence.harness);
-    const timing = evidence ? ThreadAutoCompactRules.timing(providerKey ? settings[providerKey] : undefined, evidence) : null;
-    if (!evidence || !timing) return { dueAt: null, willAutoCompact: false };
+    const rules = providerKey ? settings[providerKey] : undefined;
+    const assessed = evidence && ThreadAutoCompactRules.assess(rules, evidence, this.ports.now());
+    if (!evidence || !assessed) return { changesAt: null, cause: null };
     // A prefix that changed since the last build misses the provider's cache just like an expired one.
-    const stale = timing.rule === "idle" && this.ports.now() < timing.dueAt
-      && (checkPrefix ? await this.ports.prefixStale?.(threadId) ?? false : this.ports.knownPrefixStale?.(threadId) ?? false);
+    const stale = assessed.changesAt !== null
+      && (exactPrefix === "always" || (exactPrefix === "unlessDue" && !assessed.cause)
+        ? await this.ports.prefixStale?.(threadId) ?? false
+        : this.ports.knownPrefixStale?.(threadId) ?? false);
     signal.throwIfAborted();
-    const dueAt = stale ? evidence.activityAt : timing.dueAt;
-    if (this.ports.now() < dueAt) return { dueAt, willAutoCompact: false };
+    const { cause, changesAt } = stale ? ThreadAutoCompactRules.assess(rules, evidence, this.ports.now(), true)! : assessed;
+    if (!cause) return { changesAt, cause: null };
     const target = this.observed.get(threadId)?.target;
     const runtime = facts ? facts.runtime : provider
       ? await this.readProviderRuntime(threadId, provider)
@@ -325,10 +345,7 @@ export default class WorkbenchThreadAutoCompactController {
     signal.throwIfAborted();
     // A held questionnaire keeps the thread waiting on input after its turn ended; only a live turn blocks compaction.
     const settled = runtime && (!isThreadStatusActive(runtime.status) || hasThreadActiveFlag(runtime.status, "waitingOnUserInput"));
-    return {
-      dueAt,
-      willAutoCompact: Boolean(runtime?.latestTurn && settled && !runtime.turnLive),
-    };
+    return { changesAt, cause: runtime?.latestTurn && settled && !runtime.turnLive ? cause : null };
   }
 
   private async refreshAfterAdmission(
@@ -363,13 +380,13 @@ export default class WorkbenchThreadAutoCompactController {
     const revision = ++observed.revision;
     const decision = await this.decide(observed.target.threadId, provider, facts);
     if (this.lifetime.signal.aborted || this.observed.get(observed.target.threadId) !== observed
-      || observed.revision !== revision) return observed.willAutoCompact ?? false;
-    const previous = observed.willAutoCompact;
-    observed.willAutoCompact = decision.willAutoCompact;
-    if (previous !== null && previous !== decision.willAutoCompact) {
-      this.ports.publish(observed.target, decision.willAutoCompact);
+      || observed.revision !== revision) return observed.cause ?? null;
+    const previous = observed.cause;
+    observed.cause = decision.cause;
+    if (previous !== undefined && previous !== decision.cause) {
+      this.ports.publish(observed.target, decision.cause);
     }
-    if (decision.dueAt !== null && decision.dueAt > this.ports.now()) {
+    if (decision.changesAt !== null && decision.changesAt > this.ports.now()) {
       let timer: unknown;
       timer = this.schedule(() => {
         if (observed.timer !== timer) return;
@@ -377,10 +394,10 @@ export default class WorkbenchThreadAutoCompactController {
         void this.trackRefresh(observed).catch(error => {
           if (!this.lifetime.signal.aborted) this.warn(observed.target.threadId, error);
         });
-      }, decision.dueAt - this.ports.now());
+      }, decision.changesAt - this.ports.now());
       observed.timer = timer;
     }
-    return decision.willAutoCompact;
+    return decision.cause;
   }
 
   private trackRefresh(
