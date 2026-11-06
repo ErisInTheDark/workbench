@@ -6,6 +6,7 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
 import { joinKeptEdges } from "../database/transcript/transcript-item-bounds.ts";
+import BoundedShellOutput from "../exec/BoundedShellOutput.ts";
 import { measureGpt5Tokens } from "../lib/workbench/commands/gpt-5-token-measure.ts";
 
 export const TOOL_OUTPUT_SPILL_TOKENS = 8_000;
@@ -72,7 +73,9 @@ export async function spillToolResult(result: CallToolResult, { save, signal }: 
   const text = parts.join("\n");
   if (!await oversized(text, signal)) return result;
   const detail = await save(text).then(
-    saved => `. Full output: ${saved.path}; read only the parts you need`,
+    saved => BoundedShellOutput.hasGap(text)
+      ? `. Saved output: ${saved.path}, with a gap of its own where the command printed too much to keep; read only the parts you need`
+      : `. Full output: ${saved.path}; read only the parts you need`,
     (error: unknown) => {
       signal?.throwIfAborted();
       return `. The full output could not be saved: ${error instanceof Error ? error.message.slice(0, 200) : "unknown failure"}`;

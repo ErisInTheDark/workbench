@@ -5,6 +5,7 @@ import { ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_pr
 import { test } from "node:test";
 import CodexExecServer, { type CodexExecServerOptions } from "./CodexExecServer";
 import type { CodexExecRequest } from "./codex-exec-protocol";
+import { readWorkbenchShellPartialOutput } from "../../exec/workbench-shell-partial-output";
 
 function fixture(autoInitialize: boolean | NodeJS.Platform = true, relayBroker?: CodexExecServerOptions["relayBroker"]) {
   const platform: NodeJS.Platform = typeof autoInitialize === "string" ? autoInitialize : "linux";
@@ -335,19 +336,41 @@ test("one rejected start does not poison the executor or another command", async
   assert.equal((await next).stdout, "healthy");
 });
 
-test("output beyond the capture limit is drained so the command can still settle", async t => {
+test("output beyond the capture limit keeps its ending, and the live listener hears all of it", async t => {
   const f = fixture();
   t.after(() => f.owner.dispose());
-  const execution = f.owner.execute(f.request, new AbortController().signal);
+  let heard = 0;
+  const execution = f.owner.execute(f.request, new AbortController().signal, (_stream, chunk) => { heard += chunk.byteLength; });
   const start = await f.next("process/start");
   f.reply(start.id, { processId: start.params.processId });
   const chunk = Buffer.alloc(1024 * 1024, "x").toString("base64");
   for (let index = 0; index < 3; index++) f.event("process/output", start.params.processId, { stream: "stdout", chunk });
-  f.finish(start.params.processId, "tail");
+  f.finish(start.params.processId, "the summary");
   const result = await execution;
   assert.equal(result.exitCode, 0);
-  assert.ok(Buffer.byteLength(result.stdout) <= 1024 * 1024);
-  assert.match(result.stderr, /truncated/);
+  assert.ok(Buffer.byteLength(result.stdout) < 1.1 * 1024 * 1024);
+  assert.ok(result.stdout.startsWith("x"));
+  assert.ok(result.stdout.endsWith("the summary"));
+  assert.equal(heard, 3 * 1024 * 1024 + "the summary".length);
+});
+
+test("a stopped command carries what it printed on its stop", async t => {
+  const f = fixture();
+  t.after(() => f.owner.dispose());
+  const stop = new AbortController();
+  const reason = new Error("The user stopped this command.");
+  const execution = f.owner.execute(f.request, stop.signal);
+  const start = await f.next("process/start");
+  f.reply(start.id, { processId: start.params.processId });
+  f.event("process/output", start.params.processId, { stream: "stdout", chunk: Buffer.from("compiling\n").toString("base64") });
+  f.event("process/output", start.params.processId, { stream: "stderr", chunk: Buffer.from("warning\n").toString("base64") });
+  const stopped = execution.then(() => null, (error: unknown) => error);
+  stop.abort(reason);
+  const terminate = await f.next("process/terminate");
+  f.reply(terminate.id, { running: false });
+  const failure = await stopped;
+  assert.strictEqual(failure, reason);
+  assert.deepEqual(readWorkbenchShellPartialOutput(failure), { stdout: "compiling\n", stderr: "warning\n" });
 });
 
 test("executor drain cancels owned commands but leaves the process usable if replacement rolls back", async t => {

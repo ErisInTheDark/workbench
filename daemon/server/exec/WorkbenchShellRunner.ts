@@ -2,8 +2,7 @@
  * Exports:
  * - WorkbenchShellRunnerOptions: the exec node's executor, expensive-command slots, direct-spawn ports and Windows job runner.
  * - WorkbenchShellObserver: one shell's expensive-queue ticket plus its live output listener.
- * - default WorkbenchShellRunner: run one prepared agent command where its process lives, outside every provider generation;
- *   a failed or stopped command carries what it printed on its failure.
+ * - default WorkbenchShellRunner: run one prepared agent command where its process lives, outside every provider generation.
  */
 import type CodexExecServer from "../providers/codex/CodexExecServer";
 import type { CodexExecOutputListener } from "../providers/codex/CodexExecServer";
@@ -11,7 +10,6 @@ import executeApprovedCommand from "../interactions/WorkbenchApprovedCommandExec
 import type WorkbenchCommandCapacity from "./WorkbenchCommandCapacity";
 import type { WorkbenchCommandQueueTicket } from "./WorkbenchCommandCapacity";
 import type { WorkbenchShellRun, WorkbenchShellRunResult } from "../providers/provider-execution";
-import { withWorkbenchShellPartialOutput } from "./workbench-shell-partial-output";
 
 export interface WorkbenchShellRunnerOptions {
   executor: Pick<CodexExecServer, "execute">;
@@ -49,28 +47,15 @@ export default class WorkbenchShellRunner {
       : { ...result, queuedMs: Math.max(0, queue.admittedAt - queue.queuedAt) };
   }
 
-  /** A run that fails or is stopped carries everything it printed on that failure, so its result can still show it. */
   private async start(run: WorkbenchShellRun, signal: AbortSignal, output?: CodexExecOutputListener): Promise<WorkbenchShellRunResult> {
     signal.throwIfAborted();
-    const printed: Record<"stdout" | "stderr", Buffer[]> = { stdout: [], stderr: [] };
-    const capture: CodexExecOutputListener = (stream, chunk) => {
-      printed[stream].push(chunk);
-      output?.(stream, chunk);
-    };
-    try {
-      if (run.kind === "approved") {
-        return await (this.options.executeApproved ?? executeApprovedCommand)(run.request, signal, {
-          environment: this.options.environment ?? process.env,
-          onOutput: capture,
-          ...(this.options.windowsJobRunner ? { windowsJobRunner: this.options.windowsJobRunner } : {}),
-        });
-      }
-      return await this.options.executor.execute(run.request, signal, capture);
-    } catch (error) {
-      throw withWorkbenchShellPartialOutput(error, {
-        stdout: Buffer.concat(printed.stdout).toString("utf8"),
-        stderr: Buffer.concat(printed.stderr).toString("utf8"),
+    if (run.kind === "approved") {
+      return await (this.options.executeApproved ?? executeApprovedCommand)(run.request, signal, {
+        environment: this.options.environment ?? process.env,
+        ...(output ? { onOutput: output } : {}),
+        ...(this.options.windowsJobRunner ? { windowsJobRunner: this.options.windowsJobRunner } : {}),
       });
     }
+    return await this.options.executor.execute(run.request, signal, output);
   }
 }

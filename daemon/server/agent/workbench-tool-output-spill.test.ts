@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 
+import BoundedShellOutput from "../exec/BoundedShellOutput";
 import Gpt5TextTokens from "../lib/workbench/commands/gpt-5-text-tokens";
 import { spillToolResult, TOOL_OUTPUT_PREVIEW_TOKENS, TOOL_OUTPUT_SPILL_TOKENS } from "./workbench-tool-output-spill";
 
@@ -28,6 +29,14 @@ test("an oversized result keeps both ends and names a file holding the raw text"
   assert.match(preview, /omitted [\d,]+ characters\. Full output: C:\/files\/output\.txt/u);
   const { tokens } = Gpt5TextTokens.measure(preview);
   assert.ok(tokens < TOOL_OUTPUT_PREVIEW_TOKENS * 2.2 && tokens < TOOL_OUTPUT_SPILL_TOKENS, `${tokens} tokens`);
+});
+
+test("a saved file missing the middle of a huge command's output says so instead of claiming to be full", async () => {
+  const output = new BoundedShellOutput();
+  output.write("stdout", Buffer.alloc(3 * 1024 * 1024, "line of output\n"));
+  const preview = textOf(await spillToolResult(textResult(output.read().stdout), { save: savedAt([]) }));
+  assert.match(preview, /Saved output: C:\/files\/output\.txt, with a gap of its own/u);
+  assert.doesNotMatch(preview, /Full output/u);
 });
 
 test("output that is one enormous line still shows text from both ends", async () => {

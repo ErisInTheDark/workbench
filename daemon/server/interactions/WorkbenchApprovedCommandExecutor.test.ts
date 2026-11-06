@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
+import { readWorkbenchShellPartialOutput } from "../exec/workbench-shell-partial-output";
 import executeApprovedCommand, { type ApprovedCommandOptions } from "./WorkbenchApprovedCommandExecutor";
 
 /** A command whose `descendant` outlives the process that started it, so no parent link ties it to the command's root. */
@@ -66,6 +67,20 @@ test("a stopped approved command settles while an escaped descendant still holds
   await assert.rejects(running, reason);
   assert.ok(holderAddress, "the holder reported itself before the stop");
   assert.doesNotThrow(() => process.kill(holderAddress!.pid, 0), "the command answered without waiting for the holder");
+  assert.match(readWorkbenchShellPartialOutput(reason)?.stdout ?? "", new RegExp(`"pid":${holderAddress.pid}`, "u"), "the stop carries what it printed");
+});
+
+test("an approved command past the capture limit keeps its ending, and the live listener hears all of it", async () => {
+  let heard = 0;
+  const result = await run(
+    `process.stdout.write("x".repeat(3 * 1024 * 1024), () => process.stdout.write("the summary"));`,
+    new AbortController().signal,
+    { onOutput: (_stream, chunk) => { heard += chunk.byteLength; } },
+  );
+  assert.equal(result.exitCode, 0);
+  assert.ok(result.stdout.startsWith("x"));
+  assert.ok(result.stdout.endsWith("the summary"));
+  assert.equal(heard, 3 * 1024 * 1024 + "the summary".length);
 });
 
 test("a stopped approved command ends a descendant that outlived its parent", async t => {

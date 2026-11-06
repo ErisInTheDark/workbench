@@ -5,8 +5,8 @@
  * - CodexExecRootEvent: a command's sandboxed root process appeared, or the command settled.
  * - default CodexExecServer: retain one pinned native sandbox executor, isolate commands, stop them through the
  *   executor (an acknowledged terminate ends a command), replace a failed executor process on the next command
- *   without replaying, terminate live commands before retiring, and report each
- *   command's root process so a later generation can reap what a hard kill left behind.
+ *   without replaying, terminate live commands before retiring, carry what a failed or stopped command printed on
+ *   its failure, and report each command's root process so a later generation can reap what a hard kill left behind.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -16,12 +16,13 @@ import { z } from "zod";
 import {
   CODEX_EXEC_AUDIT_METHODS, readCodexExecFrame, type CodexExecRequest, type CodexExecResult,
 } from "./codex-exec-protocol";
+import BoundedShellOutput from "../../exec/BoundedShellOutput";
 import { readExecRootMarker, withExecRootMarker } from "../../exec/exec-root-marker";
 import type SandboxRelayBroker from "../../exec/SandboxRelayBroker";
 import type { SandboxRelayAdmission } from "../../exec/SandboxRelayBroker";
+import { withWorkbenchShellPartialOutput } from "../../exec/workbench-shell-partial-output";
 import { createSpawnOptions, killProcessTreeAsync, logError, lowerAgentProcessPriority } from "../../process-helpers";
 
-const OUTPUT_BYTES = 1024 * 1024;
 const FRAME_BYTES = 4 * 1024 * 1024;
 const METHOD_NOT_FOUND = -32601;
 const LOOPBACK_DOMAINS = {
@@ -87,10 +88,7 @@ export type CodexExecRootEvent =
 
 interface Command {
   completion: Promise<CodexExecResult>;
-  stdout: Buffer[];
-  stderr: Buffer[];
-  bytes: number;
-  truncated: boolean;
+  output: BoundedShellOutput;
   exitCode?: number;
   /** Leading stderr held until it is known whether it starts with a root marker; null once decided. */
   markerScan: Buffer | null;
@@ -188,12 +186,9 @@ export default class CodexExecServer {
   }
 
   private capture(command: Command, stream: "stdout" | "stderr", chunk: Buffer) {
-    const accepted = chunk.subarray(0, Math.max(0, OUTPUT_BYTES - command.bytes));
-    command.bytes += accepted.byteLength;
-    command.truncated ||= accepted.byteLength < chunk.byteLength;
-    if (!accepted.byteLength) return;
-    (stream === "stderr" ? command.stderr : command.stdout).push(accepted);
-    try { command.onOutput?.(stream, accepted); }
+    if (!chunk.byteLength) return;
+    command.output.write(stream, chunk);
+    try { command.onOutput?.(stream, chunk); }
     catch (error) { this.reportError(`Command output listener failed: ${String(error).slice(0, 300)}`); }
   }
 
@@ -242,11 +237,7 @@ export default class CodexExecServer {
       if (command.exitCode === undefined) {
         command.reject(new Error("Codex executor closed a command without its exit status."));
       } else {
-        command.resolve({
-          exitCode: command.exitCode,
-          stdout: Buffer.concat(command.stdout).toString("utf8"),
-          stderr: Buffer.concat(command.stderr).toString("utf8") + (command.truncated ? "\n[command output truncated]\n" : ""),
-        });
+        command.resolve({ exitCode: command.exitCode, ...command.output.read() });
       }
     }
   }
@@ -336,7 +327,7 @@ export default class CodexExecServer {
       rejectCommand = reject;
     });
     const command: Command = {
-      stdout: [], stderr: [], bytes: 0, truncated: false, completion, markerScan: Buffer.alloc(0), addressable: false,
+      output: new BoundedShellOutput(), completion, markerScan: Buffer.alloc(0), addressable: false,
       ...(onOutput ? { onOutput } : {}), resolve: resolveCommand, reject: rejectCommand,
     };
     session.commands.set(processId, command);
@@ -405,7 +396,7 @@ export default class CodexExecServer {
       return settled.result;
     } catch (error) {
       session.commands.get(processId)?.reject(error instanceof Error ? error : new Error(String(error)));
-      throw error;
+      throw withWorkbenchShellPartialOutput(error, command.output.read());
     } finally {
       relay?.release();
       clearTimeout(timer);

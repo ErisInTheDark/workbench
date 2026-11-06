@@ -2,15 +2,16 @@
  * Exports:
  * - ApprovedCommandOptions: environment, live output listener and the Windows job runner.
  * - default executeApprovedCommand: own one explicitly approved unsandboxed process and its retirement, handing each
- *   captured output chunk to an optional listener as it arrives. Retirement ends its process group (Unix) or job
- *   (Windows), orphans included; it settles once its root exits, even while escaped descendants still hold its pipes.
+ *   output chunk to an optional listener as it arrives and carrying what it printed on any failure. Retirement ends its
+ *   process group (Unix) or job (Windows), orphans included; it settles once its root exits, even while escaped
+ *   descendants still hold its pipes.
  */
 import { spawn } from "node:child_process";
+import BoundedShellOutput from "../exec/BoundedShellOutput";
+import { withWorkbenchShellPartialOutput } from "../exec/workbench-shell-partial-output";
 import type { WorkbenchAdmittedExecution } from "../providers/provider-execution";
 import { killProcessTreeAsync, lowerAgentProcessPriority } from "../process-helpers";
 import type { CodexExecOutputListener } from "../providers/codex/CodexExecServer";
-
-const MAX_OUTPUT_BYTES = 1024 * 1024;
 
 export interface ApprovedCommandOptions {
   environment?: NodeJS.ProcessEnv;
@@ -52,23 +53,16 @@ export default async function executeApprovedCommand(
   // Closing a runner that already exited is expected to fail.
   child.stdin?.on("error", () => {});
   lowerAgentProcessPriority(child);
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  let bytes = 0;
-  let truncated = false;
+  const output = new BoundedShellOutput();
   let closed = false;
   let abortReason: Error | null = null;
   let retirement: Promise<void> | null = null;
-  const capture = (stream: "stdout" | "stderr", target: Buffer[]) => (chunk: Buffer) => {
-    const accepted = chunk.subarray(0, Math.max(0, MAX_OUTPUT_BYTES - bytes));
-    bytes += accepted.byteLength;
-    truncated ||= accepted.byteLength < chunk.byteLength;
-    if (!accepted.byteLength) return;
-    target.push(accepted);
-    onOutput?.(stream, accepted);
+  const capture = (stream: "stdout" | "stderr") => (chunk: Buffer) => {
+    output.write(stream, chunk);
+    onOutput?.(stream, chunk);
   };
-  child.stdout.on("data", capture("stdout", stdout));
-  child.stderr.on("data", capture("stderr", stderr));
+  child.stdout.on("data", capture("stdout"));
+  child.stderr.on("data", capture("stderr"));
   let markRetiring = () => {};
   const retiring = new Promise<null>(resolve => { markRetiring = () => resolve(null); });
   const exited = new Promise<void>(resolve => child.once("exit", () => resolve()));
@@ -109,11 +103,9 @@ export default async function executeApprovedCommand(
     if (abortReason) throw abortReason;
     if (exit.error) throw exit.error;
     if (exit.code === null) throw new Error("Approved command exited without a status.");
-    return {
-      exitCode: exit.code,
-      stdout: Buffer.concat(stdout).toString("utf8"),
-      stderr: Buffer.concat(stderr).toString("utf8") + (truncated ? "\n[command output truncated]\n" : ""),
-    };
+    return { exitCode: exit.code, ...output.read() };
+  } catch (error) {
+    throw withWorkbenchShellPartialOutput(error, output.read());
   } finally {
     if (timer) clearTimeout(timer);
     signal.removeEventListener("abort", onAbort);

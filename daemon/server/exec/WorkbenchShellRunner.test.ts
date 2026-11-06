@@ -7,7 +7,6 @@ import { test } from "node:test";
 import { WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 import type { WorkbenchShellRun } from "../providers/provider-execution";
 import WorkbenchShellRunner from "./WorkbenchShellRunner";
-import { readWorkbenchShellPartialOutput } from "./workbench-shell-partial-output";
 
 const caller = { harness: "claude", threadId: WorkbenchThreadIdSchema.parse("other"), cwd: process.cwd() };
 const sandboxedRun = (label: string, expensive: boolean): WorkbenchShellRun => ({
@@ -45,7 +44,7 @@ test("expensive runs take a machine-wide slot before starting; approved runs spa
   assert.deepEqual(approved, ["other"]);
 });
 
-test("a stopped run carries everything it printed on its stop, while the caller still hears each chunk", async () => {
+test("a stop ends the run with its own reason, while the caller still hears each chunk", async () => {
   const stop = new AbortController();
   const reason = new Error("The user stopped this command.");
   const heard: string[] = [];
@@ -63,7 +62,6 @@ test("a stopped run carries everything it printed on its stop, while the caller 
     queued: () => {}, admitted: () => {}, output: (stream, chunk) => heard.push(`${stream}:${chunk.toString()}`),
   }).then(() => null, (error: unknown) => error);
   assert.strictEqual(failure, reason, "the stop itself still ends the run");
-  assert.deepEqual(readWorkbenchShellPartialOutput(failure), { stdout: "compiling\n", stderr: "warning\n" });
   assert.deepEqual(heard, ["stdout:compiling\n", "stderr:warning\n"]);
 });
 
