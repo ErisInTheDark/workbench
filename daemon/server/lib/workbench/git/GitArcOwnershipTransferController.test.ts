@@ -431,9 +431,15 @@ test("selected release rejects unowned paths and uncovered child plans before ch
   const controller = new WorkbenchGitCheckpointController();
   await start(controller, cwd, "parent", ["two.txt"]);
   const input = {
-    cwd, threadId: "child", source: { harness: "codex" as const, threadId: "parent" }, selectedPaths: ["one.txt"],
+    cwd, threadId: "child", source: { harness: "codex" as const, threadId: "parent" }, selectedPaths: ["one.txt", "two.txt"],
   };
-  await assert.rejects(controller.prepareReleaseToChild(input), /selected path|owned/i);
+  await assert.rejects(controller.prepareReleaseToChild(input), (error: GitArcRejectionError) => {
+    assert.deepEqual(error.rejection, { reason: "unclaimedRemoval", paths: ["one.txt"] });
+    assert.match(error.message, /one\.txt/u);
+    assert.doesNotMatch(error.message, /two\.txt/u);
+    return true;
+  });
+  assert.deepEqual((await controller.readScope({ cwd, threadId: "parent" }))?.claimedPaths, ["two.txt"]);
   await controller.editPlanClaims({
     cwd, threadId: "child", inherit: false, intentName: "other work",
     addPaths: ["one.txt"], removePaths: [], adoptPaths: [],

@@ -5,6 +5,7 @@
  * - GitArcScopeState: read-only planned and live scope facts.
  * - GitArcMutationResult: active or resolved scope publication facts.
  * - applyGitClaimChanges: validate subtraction of exact entries or folders containing them, and produce a minimal final scope.
+ * - assertSelectedLiveClaims: reject a selected release or transfer, naming every path that is not a live claim.
  */
 import GitArcPathSet from "./GitArcPathSet";
 import { GitArcRejectionError } from "./git-arc-rejections";
@@ -67,4 +68,10 @@ export function applyGitClaimChanges(existing: readonly string[], changes: GitAr
   const candidates = [...new Set([...inherited.filter((candidate) => !removed.covers(candidate)), ...additions, ...adoptions])].sort();
   const scope = new GitArcPathSet(candidates);
   return candidates.filter((candidate) => !scope.within(candidate));
+}
+
+export function assertSelectedLiveClaims(selected: readonly string[], live: readonly string[]) {
+  const liveClaims = new Set(live);
+  const unclaimed = selected.filter((candidate) => !liveClaims.has(candidate));
+  if (unclaimed.length) throw new GitArcRejectionError({ reason: "unclaimedRemoval", paths: unclaimed }, `Selected paths are not live claims of the releasing thread: ${unclaimed.join(", ")}. No claims moved.`);
 }

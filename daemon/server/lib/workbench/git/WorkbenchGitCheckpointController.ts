@@ -28,7 +28,7 @@ import type {
 import type { GitArcRestackResult } from "workbench-shared/workbench/git/git-arc-restack";
 import { GitArcMissingClaimSetError } from "workbench-shared/workbench/git/git-arc-failures";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
-import type { GitArcClaimChanges, GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";
+import { assertSelectedLiveClaims, type GitArcClaimChanges, type GitArcPlanningDrift } from "workbench-shared/workbench/git/git-arc-state";
 import GitArcLifecycleController from "./GitArcLifecycleController";
 import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
 import GitArcRegistry, {
@@ -812,11 +812,8 @@ export default class WorkbenchGitCheckpointController {
     paths: string[],
   ): Promise<GitArcReleaseResult> {
     const selected = releasable.repository.normalizePaths(paths);
+    assertSelectedLiveClaims(selected, ownership.activeClaims);
     const selectedSet = new Set(selected);
-    const activeSet = new Set(ownership.activeClaims);
-    if (selectedSet.size !== paths.length || selected.some(value => !activeSet.has(value))) {
-      throw new Error("Every selected path must be a distinct live claim owned by this thread.");
-    }
     if (releasable.active.phase !== "plan") {
       const { kind: _kind, removedClaims, ...result } = await this.lifecycle.claims({
         cwd: releasable.repository.root,

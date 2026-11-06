@@ -1508,8 +1508,14 @@ async function startDirtyPair(context: TestContext) {
 test("selected disown releases only named dirty claims from an active arc", async (context) => {
   const { controller, identity } = await startDirtyPair(context);
   await assert.rejects(controller.releaseArc({ ...identity, disown: false, paths: ["one.txt"] }), /requires disown/u);
-  await assert.rejects(controller.releaseArc({ ...identity, disown: true, paths: ["missing.txt"] }), /live claim/u);
-  const released = await controller.releaseArc({ ...identity, disown: true, paths: ["one.txt"] });
+  await assert.rejects(controller.releaseArc({ ...identity, disown: true, paths: ["one.txt", "missing.txt"] }), (error: GitArcRejectionError) => {
+    assert.deepEqual(error.rejection, { reason: "unclaimedRemoval", paths: ["missing.txt"] });
+    assert.match(error.message, /missing\.txt/u);
+    assert.doesNotMatch(error.message, /one\.txt/u);
+    return true;
+  });
+  assert.deepEqual((await controller.readStatus(identity)).dirtyClaims, ["one.txt", "two.txt"]);
+  const released = await controller.releaseArc({ ...identity, disown: true, paths: ["one.txt", "./one.txt"] });
   assert.deepEqual(released.releasedClaims, ["one.txt"]);
   const status = await controller.readStatus(identity);
   assert.deepEqual(status.dirtyClaims, ["two.txt"]);

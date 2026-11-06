@@ -1352,10 +1352,8 @@ export default class WorkbenchWorkspaceGitArcController {
     beforeTransfer?: () => Promise<void>,
   ) {
     const members = await this.resolveRepoMembers(project);
-    const selectedPaths = input.paths.map(value => this.parseRootPath(project, value, project.root.id).absolute);
-    if ((!selectedPaths.length && !input.fromPlan && input.transferStash !== true)
-      || new Set(selectedPaths.map(selected => comparable(selected))).size !== selectedPaths.length) {
-      throw new Error("Release to a subagent requires distinct live claim paths, fromPlan or transferStash: true.");
+    if (!input.paths.length && !input.fromPlan && input.transferStash !== true) {
+      throw new Error("Release to a subagent requires live claim paths, fromPlan or transferStash: true.");
     }
     const groups = this.groupRootPaths(project, members, input.paths, []);
     const selected = new Map(groups.map(group => [group.member.repoRoot, group.paths]));

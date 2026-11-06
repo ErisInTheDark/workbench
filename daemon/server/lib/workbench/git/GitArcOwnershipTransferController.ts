@@ -10,7 +10,7 @@ import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-
 import type { GitArcHarness } from "workbench-shared/workbench/git/git-arc-storage";
 import type { GitArcInvalidatedProposal } from "workbench-shared/workbench/git/git-arc-receipts";
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
-import { applyGitClaimChanges } from "workbench-shared/workbench/git/git-arc-state";
+import { applyGitClaimChanges, assertSelectedLiveClaims } from "workbench-shared/workbench/git/git-arc-state";
 import type { GitArcReleaseResult } from "./WorkbenchGitCheckpointController";
 import { expandGitArcClaimPaths } from "./git-arc-claim-expansion";
 import GitArcClaimOwnershipController from "./GitArcClaimOwnershipController";
@@ -209,11 +209,7 @@ export default class GitArcOwnershipTransferController {
     const sourceSealed = new Set(sourceOwn.flatMap(({ layer }) => layer.proposalIds));
     const sourceLive = sourceOwnership?.guardClaims ?? [];
     const requested = selectedPaths?.length ? repository.normalizePaths(selectedPaths) : [];
-    const sourceLiveSet = new Set(sourceLive);
-    if (selectedPaths && (new Set(requested).size !== selectedPaths.length
-      || requested.some(value => !sourceLiveSet.has(value)))) {
-      throw new Error("Every selected path must be a distinct live claim owned by the releasing thread.");
-    }
+    assertSelectedLiveClaims(requested, sourceLive);
     const incoming = selectedPaths ? requested : sourceLive;
     const incomingSet = new Set(incoming);
     const remaining = sourceLive.filter(value => !incomingSet.has(value));
