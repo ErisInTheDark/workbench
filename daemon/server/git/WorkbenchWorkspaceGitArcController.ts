@@ -1813,11 +1813,13 @@ export default class WorkbenchWorkspaceGitArcController {
     const refs = this.refsByRepo(project, members, request.refs);
     if (request.checkpointCommit) {
       // Backups live in each document's own repository, whichever repository the caller sits in.
-      const targets = parseProcessDocumentRevision(request.checkpointCommit) !== null && groups.length
-        ? groups.map(({ member }) => member)
-        : [await this.callerMember(project, members, request)];
+      const targets = parseProcessDocumentRevision(request.checkpointCommit) === null
+        ? [await this.inspectionRefMember(project, members, request, request.checkpointCommit)]
+        : groups.length ? groups.map(({ member }) => member) : [await this.callerMember(project, members, request)];
       for (const member of targets) refs.set(member.repoRoot, request.checkpointCommit);
     }
+    // Any named ref makes the request historical, so a root it misses must fail rather than land on that root's baseline.
+    const refFree = !refs.size && !request.confirmRestore;
     if (request.confirmRestore && !refs.size) {
       const lifecycle = await this.findLifecycleState(project, request.harness, request.threadId);
       for (const member of lifecycle?.members ?? []) refs.set(member.repoRoot, member.checkpointCommit);
@@ -1827,9 +1829,9 @@ export default class WorkbenchWorkspaceGitArcController {
     const values = await this.runMembers(selected, async (member) => {
       const group = groups.find((candidate) => candidate.member.repoRoot === member.repoRoot);
       const checkpointCommit = refs.get(member.repoRoot);
-      if (!checkpointCommit) throw new GitArcRejectionError({ reason: "missingRestoreRef", rootId: member.roots[0]!.id }, `Restore is missing the current ref for ${member.roots[0]!.id}.`);
+      if (!checkpointCommit && !(refFree && group?.paths.length)) throw new GitArcRejectionError({ reason: "missingRestoreRef", rootId: member.roots[0]!.id }, `Restore is missing the current ref for ${member.roots[0]!.id}.`);
       return await this.local.restore({
-        checkpointCommit, confirmRestore: request.confirmRestore, cwd: member.repoRoot, harness: request.harness,
+        ...(checkpointCommit ? { checkpointCommit } : {}), confirmRestore: request.confirmRestore, cwd: member.repoRoot, harness: request.harness,
         ...(group?.paths.length ? { paths: group.paths } : {}), threadId: request.threadId,
       });
     }, undefined, "write", { harness: request.harness, project, threadId: request.threadId });

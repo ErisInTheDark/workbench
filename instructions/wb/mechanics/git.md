@@ -200,7 +200,7 @@ constraints:
 
 <docs tools="git_arc_restore">
 ### restore an arc
-- Use <tool id="git_arc_restore" /> with exact ref and path list to restore selected paths to pre-patch state.
+- Undo own edits: <tool id="git_arc_restore" /> with `paths`, no ref; lands on arc baseline, sealed layers kept. Add `ref` to pick another version: proposal ID gives a file as that proposal left it (only files it changed); arc SHA gives historical snapshot.
 - Do not restore more than required.
 - After restore, remove unneeded clean claims with <tool id="git_arc_claims" /> and `{ inherit: true, removePaths }`.
 - Full arc: preview all affected paths first, get explicit user approval if missing, then reuse with `confirmRestore: true`.

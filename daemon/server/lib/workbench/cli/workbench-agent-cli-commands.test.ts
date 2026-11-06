@@ -1237,6 +1237,20 @@ test("parses fixed thread, checkpoint, and Browse requests with cwd ownership", 
   assert.equal(powerShellCheckpointPathRestore.kind, "request");
   assert.deepEqual(powerShellCheckpointPathRestore.request, checkpointPathRestore.request);
 
+  const baselinePathRestore = await parseWorkbenchAgentCliCommand([
+    "git", "arc", "restore", "--", "src/one.ts",
+  ], gitOptions);
+  assert.equal(baselinePathRestore.kind, "request");
+  assert.deepEqual(baselinePathRestore.request.body, {
+    action: "restore",
+    cwd: "C:/workspace",
+    harness: "codex",
+    paths: ["src/one.ts"],
+    threadId: "thread-1",
+  });
+
+  assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", "restore", "--confirm"], gitOptions)).kind, "error");
+
   const ripgrep = await parseWorkbenchAgentCliCommand([
     "rg", "--", "-n", "a pattern with 'quotes'", "webapp",
   ], { cwd: "C:/workspace" });

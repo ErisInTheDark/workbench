@@ -25,7 +25,6 @@ import { GitArcFailureSchema } from "./git-arc-failures";
 import { GitArcStackedProposalSchema } from "./git-arc-receipts";
 import { gitArcRejectionIssue } from "./git-arc-rejections";
 import { GitArcStatusFullSchema } from "./git-arc-status";
-import { parseProcessDocumentRevision } from "./git-arc-storage";
 import { GitCheckpointFileChangeSchema } from "./git-checkpoint-file-change.ts";
 
 export { GitCheckpointFileChangeSchema, type GitCheckpointFileChange } from "./git-checkpoint-file-change.ts";
@@ -337,12 +336,10 @@ export const GitCheckpointRequestSchema = z.discriminatedUnion("action", [
   }).strict(),
   z.object({
     action: z.literal("restore"),
-    checkpointCommit: nonEmptyString
-      .refine(ref => checkpointSha.safeParse(ref).success || parseProcessDocumentRevision(ref) !== null)
-      .optional(),
+    checkpointCommit: nonEmptyString.optional(),
     confirmRestore: z.boolean().optional(),
     paths: z.array(nonEmptyString).optional(),
-    refs: z.array(GitArcMemberRefSchema).default([]),
+    refs: z.array(GitArcInspectionMemberRefSchema).default([]),
     roots: z.array(GitArcRootPathsSchema).default([]),
     ...checkpointBaseRequest,
   }),

@@ -132,6 +132,18 @@ interface ScopedCheckpointInput extends CheckpointInput {
   paths?: string[];
 }
 
+interface GitArcRestoreResult {
+  checkpointCommit: string;
+  checkpointRef: string;
+  intentName: string | null;
+  repoRoot: string;
+  restored: true;
+  restoredPaths?: string[];
+  scopePaths: string[];
+}
+
+const ARC_SHA = /^[a-f0-9]{7,64}$/iu;
+
 export interface GitCheckpointCreateResult {
   phase?: "plan" | "active" | "stashed" | "resolved";
   checkpointCommit: string;
@@ -1199,7 +1211,7 @@ export default class WorkbenchGitCheckpointController {
           }
         }
       }
-      if (input.ref && !/^[a-f0-9]{7,64}$/iu.test(input.ref)) {
+      if (input.ref && !ARC_SHA.test(input.ref)) {
         const harness = normalizeHarness(input.harness);
         const proposal = await this.store(repository).readProposal(harness, input.threadId, input.ref);
         const paths = input.paths?.length ? repository.normalizePaths(input.paths) : repository.normalizePaths(proposal.metadata.paths);
@@ -1382,6 +1394,7 @@ export default class WorkbenchGitCheckpointController {
     ));
   }
 
+  /** Restores to an arc SHA, a proposal's version of files it changed, a process document backup, or with no ref the active arc's baseline. */
   async restore({
     checkpointCommit,
     confirmRestore,
@@ -1389,25 +1402,95 @@ export default class WorkbenchGitCheckpointController {
     harness: rawHarness,
     paths: rawPaths,
     threadId,
-  }: CheckpointInput & { confirmRestore?: boolean; paths?: string[] }): Promise<{
-    checkpointCommit: string;
-    checkpointRef: string;
-    intentName: string | null;
-    repoRoot: string;
-    restored: true;
-    restoredPaths?: string[];
-    scopePaths: string[];
-  }> {
+  }: ControllerInput & { checkpointCommit?: string; confirmRestore?: boolean; paths?: string[] }): Promise<GitArcRestoreResult> {
     return await GitObjectReadSession.run(async () => {
-      if (!rawPaths?.length && !confirmRestore) throw new Error("Checkpoint restore requires confirmation or selected paths.");
       const repoRoot = await resolveRepoRoot(cwd);
       const harness = normalizeHarness(rawHarness);
       const repository = new WorkbenchGitRepository(repoRoot);
+      if (!checkpointCommit) {
+        if (!rawPaths?.length || confirmRestore) throw new Error("Checkpoint restore requires a checkpoint ref.");
+        const active = await this.registry(repository).find({ harness, threadId });
+        if (active?.phase !== "active") throw new Error("This thread does not own an active Git arc.");
+        await this.requireRestorableClaims(repository, active, repository.normalizePaths(rawPaths));
+        return await this.restoreArc({ checkpointCommit: active.checkpointCommit, cwd: repoRoot, harness, paths: rawPaths, threadId });
+      }
       const backupRevision = parseProcessDocumentRevision(checkpointCommit);
       if (backupRevision !== null) {
         if (!rawPaths?.length) throw new Error("Process document restore needs paths.");
         return await this.processDocuments(repository).restore({ harness, threadId }, backupRevision, rawPaths);
       }
+      if (!ARC_SHA.test(checkpointCommit)) {
+        if (!rawPaths?.length || confirmRestore) {
+          throw new GitArcRejectionError({ reason: "invalidRestoreRef" }, "A proposal ID ref needs paths, and accepts only files that proposal changed. For a full restore, pass an arc SHA.");
+        }
+        return await this.restoreProposalVersion(repository, harness, threadId, checkpointCommit, rawPaths);
+      }
+      return await this.restoreArc({
+        checkpointCommit, ...(confirmRestore !== undefined ? { confirmRestore } : {}), cwd: repoRoot, harness, ...(rawPaths ? { paths: rawPaths } : {}), threadId,
+      });
+    });
+  }
+
+  /** Claims are the write gate for restores that name no arc snapshot; a folder is never covered by the file claims inside it. */
+  private async requireRestorableClaims(repository: WorkbenchGitRepository, entry: GitArcRegistryEntry | null, paths: string[]) {
+    const owned = new GitArcPathSet(entry
+      ? [...getGitArcLiveClaimPaths(entry), ...await this.stack(repository).pendingOwnBaselinePaths(entry)]
+      : []);
+    const outside = paths.filter((filePath) => !owned.covers(filePath));
+    if (outside.length) {
+      throw new GitArcRejectionError({ reason: "pathsOutsideClaims", paths: outside }, `Restored paths must stay within this thread's claims: ${outside.join(", ")}`);
+    }
+  }
+
+  /** Outside its own paths a proposal's tree holds stale base content, so only the files it changed have a version to restore. */
+  private async restoreProposalVersion(repository: WorkbenchGitRepository, harness: GitArcHarness, threadId: string, proposalId: string, rawPaths: string[]): Promise<GitArcRestoreResult> {
+    const proposal = await this.store(repository).readProposal(harness, threadId, proposalId);
+    const paths = repository.normalizePaths(rawPaths);
+    const proposalPaths = new GitArcPathSet(proposal.metadata.paths);
+    const outside = paths.filter((filePath) => !proposalPaths.covers(filePath));
+    if (outside.length) {
+      throw new GitArcRejectionError(
+        { reason: "restorePathsOutsideProposal", paths: outside },
+        `These paths are not in proposal ${proposalId}: ${outside.join(", ")}. Omit ref to restore them to the current arc baseline.`,
+      );
+    }
+    await this.requireRestorableClaims(repository, await this.registry(repository).find({ harness, threadId }), paths);
+    return {
+      checkpointCommit: proposal.proposalCommit,
+      checkpointRef: proposal.proposalRef,
+      intentName: null,
+      repoRoot: repository.root,
+      restored: true as const,
+      restoredPaths: await this.writeRestoredPaths(repository, proposal.proposalCommit, paths),
+      scopePaths: proposal.metadata.paths,
+    };
+  }
+
+  /** Makes `paths` match `source`, removing those it lacks; returns what changed. */
+  private async writeRestoredPaths(repository: WorkbenchGitRepository, source: string | null, paths: string[]) {
+    const currentTree = await repository.writeScopedWorktreeTree(paths, source);
+    const changedPaths = await repository.listChangedPaths(source, currentTree, paths);
+    const sourcePaths = new Set(await repository.listTreePaths(source, paths));
+    await Promise.all(changedPaths.filter((filePath) => !sourcePaths.has(filePath)).map(async (filePath) => {
+      await fs.rm(repository.resolvePath(filePath), { force: true, recursive: true });
+    }));
+    await repository.restorePaths(source, changedPaths.filter((filePath) => sourcePaths.has(filePath)));
+    return [...new Set(changedPaths)].sort((left, right) => left.localeCompare(right));
+  }
+
+  private async restoreArc({
+    checkpointCommit,
+    confirmRestore,
+    cwd,
+    harness: rawHarness,
+    paths: rawPaths,
+    threadId,
+  }: CheckpointInput & { confirmRestore?: boolean; paths?: string[] }): Promise<GitArcRestoreResult> {
+    return await GitObjectReadSession.run(async () => {
+      if (!rawPaths?.length && !confirmRestore) throw new Error("Checkpoint restore requires confirmation or selected paths.");
+      const repoRoot = await resolveRepoRoot(cwd);
+      const harness = normalizeHarness(rawHarness);
+      const repository = new WorkbenchGitRepository(repoRoot);
 
       if (!rawPaths?.length) {
         const registry = this.registry(repository);
@@ -1523,15 +1606,7 @@ export default class WorkbenchGitCheckpointController {
           throw new Error(`Selected restore paths no longer match the arc baseline: ${headMovement.changedPaths.join(", ")}`);
         }
       }
-      const currentTree = await repository.writeScopedWorktreeTree(paths, restoreSource);
-      const changedPaths = await repository.listChangedPaths(restoreSource, currentTree, paths);
-      const checkpointPaths = new Set(await repository.listTreePaths(restoreSource, paths));
-      const addedPaths = changedPaths.filter((filePath) => !checkpointPaths.has(filePath));
-      const sourcePaths = changedPaths.filter((filePath) => checkpointPaths.has(filePath));
-      await Promise.all(addedPaths.map(async (filePath) => {
-        await fs.rm(repository.resolvePath(filePath), { force: true, recursive: true });
-      }));
-      await repository.restorePaths(restoreSource, sourcePaths);
+      const restoredPaths = await this.writeRestoredPaths(repository, restoreSource, paths);
       if (releasingArc) {
         const { updates: proposalUpdates } = await this.proposals.prepareUnavailableUpdates({
           cwd: releasingArc.repository.root,
@@ -1568,7 +1643,7 @@ export default class WorkbenchGitCheckpointController {
         intentName: metadata.intentName ?? null,
         repoRoot,
         restored: true as const,
-        restoredPaths: [...new Set(changedPaths)].sort((left, right) => left.localeCompare(right)),
+        restoredPaths,
         scopePaths: metadata.scopePaths,
       };
     });

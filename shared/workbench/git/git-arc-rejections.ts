@@ -75,12 +75,13 @@ const simpleMessages = {
   emptyRestack: "The restack requests no changes.",
   invalidRestackTarget: "The restack names a proposal or edit it can't apply to this thread's pending stack.",
   invalidFoldTarget: "A proposal can only fold into a pending proposal in its own or a lower stack layer.",
+  invalidRestoreRef: "Restoring from a proposal needs selected files.",
 } as const;
 
 export const GitArcRejectionSchema = z.discriminatedUnion("reason", [
   z.object({ reason: z.enum(Object.keys(simpleMessages) as [keyof typeof simpleMessages, ...(keyof typeof simpleMessages)[]]) }).strict(),
   z.object({
-    reason: z.enum(["unclaimedRemoval", "conflictingClaimOperations", "adoptionRequiresUnclaimed", "adoptionRequiresDirty", "uncoveredDirtyClaims", "pathsOutsideClaims", "pathsInPendingProposal", "baselineChanged", "sealedStackContent"]),
+    reason: z.enum(["unclaimedRemoval", "conflictingClaimOperations", "adoptionRequiresUnclaimed", "adoptionRequiresDirty", "uncoveredDirtyClaims", "pathsOutsideClaims", "pathsInPendingProposal", "baselineChanged", "sealedStackContent", "restorePathsOutsideProposal"]),
     paths: facts,
   }).strict(),
   z.object({ reason: z.literal("proposalNotFound"), proposalId: fact }).strict(),
@@ -108,7 +109,8 @@ const humanMessages = {
   adoptionRequiresUnclaimed: "These changes are already claimed.",
   adoptionRequiresDirty: "These files have no unclaimed changes to adopt.",
   uncoveredDirtyClaims: "The revised plan would leave changed files without an owner.",
-  pathsOutsideClaims: "The proposal includes files outside this arc's claims.",
+  pathsOutsideClaims: "These files are outside this arc's claims.",
+  restorePathsOutsideProposal: "That proposal did not change these files.",
   pathsInPendingProposal: "These files are already in another pending proposal.",
   baselineChanged: "The selected files changed since the arc's baseline.",
   sealedStackContent: "These files hold sealed stack-layer content that hasn't landed, so a thread must keep claiming them until the layer commits.",

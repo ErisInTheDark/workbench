@@ -1064,6 +1064,76 @@ test("proposing a folder selects only the claimed files beneath it", async (cont
   assert.deepEqual(proposal.paths, ["nested/a.txt", "nested/b.txt"]);
 });
 
+test("selected restore lands on the arc baseline or a named proposal's version without touching stack refs", async (context) => {
+  const fixture = await fixtureCache.copyFresh(CHECKPOINT_OPERATIONS_FIXTURE);
+  context.after(fixture.dispose);
+  const { root: repoRoot } = branchFixture(fixture, "additions");
+  const identity = { cwd: repoRoot, threadId: "thread-restore" };
+  const read = async (file: string) => await fs.readFile(path.join(repoRoot, file), "utf8");
+  const exists = async (file: string) => await fs.access(path.join(repoRoot, file)).then(() => true, () => false);
+  const refs = async () => await git(repoRoot, ["for-each-ref", "--format=%(refname) %(objectname)"]);
+  const rejectsWith = async (reason: string, input: { checkpointCommit?: string; confirmRestore?: boolean; paths?: string[] }) => {
+    await assert.rejects(
+      controller.restore({ ...identity, ...input }),
+      (error: unknown) => error instanceof GitArcRejectionError && error.rejection.reason === reason,
+    );
+  };
+
+  await write(repoRoot, "doomed.txt", "doomed\n");
+  await write(repoRoot, "untouched.txt", "untouched\n");
+  await git(repoRoot, ["add", "--", "doomed.txt", "untouched.txt"]);
+  await git(repoRoot, ["commit", "-m", "restore baseline"]);
+  const claimed = ["doomed.txt", "experiment.txt", "shared.txt", "untouched.txt"];
+  const plan = await createGitPlan({ ...identity, intentName: "Stacked restore", paths: claimed });
+  await startGitArc({ ...identity, checkpointCommit: plan.checkpointCommit });
+
+  await write(repoRoot, "shared.txt", "lower\n");
+  await fs.rm(path.join(repoRoot, "doomed.txt"));
+  const lower = await createGitCheckpointProposal({ ...identity, description: "", paths: ["doomed.txt", "shared.txt"], title: "Lower" });
+  await controller.stackArc({ ...identity, title: "lower layer" });
+  await write(repoRoot, "shared.txt", "upper\n");
+  const upper = await createGitCheckpointProposal({ ...identity, description: "", paths: ["shared.txt"], title: "Upper" });
+  await controller.stackArc({ ...identity, title: "upper layer" });
+  const sealedRefs = await refs();
+
+  const experiment = async () => {
+    await write(repoRoot, "shared.txt", "experiment\n");
+    await write(repoRoot, "untouched.txt", "experiment\n");
+    await write(repoRoot, "experiment.txt", "experiment\n");
+    await write(repoRoot, "doomed.txt", "experiment\n");
+  };
+
+  await experiment();
+  const baseline = await controller.restore({ ...identity, paths: claimed });
+  assert.deepEqual(baseline.restoredPaths, claimed);
+  assert.equal(await read("shared.txt"), "upper\n", "sealed content survives a ref-free restore");
+  assert.equal(await read("untouched.txt"), "untouched\n");
+  assert.equal(await exists("experiment.txt"), false);
+  assert.equal(await exists("doomed.txt"), false, "a path deleted by a sealed layer stays deleted");
+
+  await experiment();
+  await controller.restore({ ...identity, checkpointCommit: upper.proposalId, paths: ["shared.txt"] });
+  assert.equal(await read("shared.txt"), "upper\n");
+  await controller.restore({ ...identity, checkpointCommit: lower.proposalId, paths: ["doomed.txt", "shared.txt"] });
+  assert.equal(await read("shared.txt"), "lower\n", "a lower layer's version is what was asked for");
+  assert.equal(await exists("doomed.txt"), false, "a path the proposal deleted is removed");
+  assert.equal(await refs(), sealedRefs, "restoring only writes the worktree");
+
+  await experiment();
+  await write(repoRoot, "nested/unclaimed.txt", "not ours\n");
+  await rejectsWith("restorePathsOutsideProposal", { checkpointCommit: lower.proposalId, paths: ["shared.txt", "untouched.txt"] });
+  await rejectsWith("pathsOutsideClaims", { paths: ["shared.txt", "nested/unclaimed.txt"] });
+  await rejectsWith("pathsOutsideClaims", { paths: ["nested"] });
+  await rejectsWith("invalidRestoreRef", { checkpointCommit: lower.proposalId });
+  await rejectsWith("invalidRestoreRef", { checkpointCommit: lower.proposalId, confirmRestore: true });
+  await rejectsWith("proposalNotFound", { checkpointCommit: "no-such-proposal", paths: ["shared.txt"] });
+  assert.equal(await read("shared.txt"), "experiment\n", "a refused restore writes nothing");
+  assert.equal(await read("nested/unclaimed.txt"), "not ours\n");
+
+  await assert.rejects(controller.restore({ cwd: repoRoot, paths: ["shared.txt"], threadId: "thread-without-arc" }), /does not own an active Git arc/u);
+  assert.equal(await read("shared.txt"), "experiment\n");
+});
+
 test("discard drops frozen work without changing the worktree and keeps an inactive successor plan", async (context) => {
   const fixture = await fixtureCache.copyFresh(CHECKPOINT_OPERATIONS_FIXTURE);
   context.after(fixture.dispose);

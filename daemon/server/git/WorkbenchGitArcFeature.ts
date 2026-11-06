@@ -1403,14 +1403,13 @@ export default class WorkbenchGitArcFeature {
       case "readDiffArtifact": return new Response(await this.controller.readLegacyDiffArtifact({
         artifactId: input.diffArtifactId, threadId: input.threadId,
       }), { headers: { "Content-Type": "text/plain; charset=utf-8" } });
-      case "restore": {
-        if (!input.checkpointCommit) throw new Error("Checkpoint restore requires a checkpoint ref.");
+      case "restore":
         return Response.json(await this.controller.restore({
-          ...common, checkpointCommit: input.checkpointCommit,
+          ...common,
+          ...(input.checkpointCommit ? { checkpointCommit: input.checkpointCommit } : {}),
           ...(input.confirmRestore !== undefined ? { confirmRestore: input.confirmRestore } : {}),
           ...(input.paths ? { paths: input.paths } : {}),
         }));
-      }
       case "arcEditStart":
       case "arcEditView":
       case "arcEditApply":

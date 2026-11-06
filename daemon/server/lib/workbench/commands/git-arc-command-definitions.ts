@@ -367,20 +367,22 @@ const rescind = defineWorkbenchAgentCommand({
 });
 
 const restore = defineWorkbenchAgentCommand({
-  description: "Restore selected paths from an arc, or restore its full snapshot after explicit confirmation. Ref `process-documents` or `process-documents~N` restores selected process documents from their backups in any mode.",
+  description: "Restore selected paths, or an arc's full snapshot after explicit confirmation. Ref `process-documents` or `process-documents~N` restores selected process documents from their backups in any mode.",
   effects: { destructive: true },
   helpGroups: ["git-arc"],
   words: ["git", "arc", "restore"],
-  usage: "wb git arc restore --ref <ref> (--confirm | -- <path> [<path>...])",
+  usage: "wb git arc restore (--ref <ref> --confirm | [--ref <ref>] -- <path> [<path>...])",
   inputSchema: z.object({
-    confirmRestore: z.boolean().default(false), paths: paths.default([]), ref: requiredText.optional(),
+    confirmRestore: z.boolean().default(false), paths: paths.default([]),
+    ref: requiredText.optional().describe("Omit with paths for the active arc baseline, sealed layers included. Proposal ID: that proposal's version of files it changed. Arc SHA: that historical snapshot."),
     refs: z.array(memberRefSchema).default([]), roots: z.array(rootPathsSchema).default([]),
   }).strict().refine(({ confirmRestore, paths: selectedPaths, roots }) => confirmRestore || selectedPaths.length > 0 || roots.length > 0, { message: "Full arc restore requires confirmRestore; otherwise provide paths." }),
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(preservePowerShellTrailingPaths(args, { boolean: ["--confirm"], values: ["--ref"] }), {
       boolean: ["--confirm"], trailing: true, values: ["--ref"],
     });
-    return { confirmRestore: flags.has("--confirm"), paths: flags.trailing, ref: flags.required("--ref"), refs: [], roots: [] };
+    const confirmRestore = flags.has("--confirm");
+    return { confirmRestore, paths: flags.trailing, ref: confirmRestore ? flags.required("--ref") : flags.optional("--ref") ?? undefined, refs: [], roots: [] };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {

@@ -1760,6 +1760,47 @@ test("process documents hide, back up and restore in each document's own reposit
   assert.equal((await withoutRepository.backupProcessDocuments(mixed, "codex", "thread", ["web:loose.md"])).length, 0);
 });
 
+test("workspace selected restore routes proposal ids to their repository and never turns an explicit ref into a ref-free restore", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-selected-restore-");
+  context.after(async () => await temporary.dispose());
+  const base = await realpath(temporary.path);
+  const [api, web] = [path.join(base, "api"), path.join(base, "web")];
+  const local = new WorkbenchGitCheckpointControllerImpl();
+  const identity = { harness: "codex" as const, threadId: "thread" };
+  for (const [repository, files] of [[api, ["a.txt"]], [web, ["b.txt", "c.txt"]]] as const) {
+    await execFileAsync("git", ["init", "-q", repository], { windowsHide: true });
+    for (const [key, value] of [["user.name", "fixture"], ["user.email", "fixture@example.com"], ["core.autocrlf", "false"]]) {
+      await execFileAsync("git", ["-C", repository, "config", key!, value!], { windowsHide: true });
+    }
+    for (const file of files) await writeFile(path.join(repository, file), "original\n", "utf8");
+    await execFileAsync("git", ["-C", repository, "add", "."], { windowsHide: true });
+    await execFileAsync("git", ["-C", repository, "commit", "-q", "-m", "base"], { windowsHide: true });
+    const plan = await local.createPlan({ ...identity, cwd: repository, intentName: "Restore", paths: [...files] });
+    await local.startArc({ ...identity, checkpointCommit: plan.checkpointCommit, cwd: repository });
+  }
+  const project = createWorkspace(api, web);
+  const controller = new WorkbenchWorkspaceGitArcController(local, new WorkbenchThreadTransitionCoordinator(), async rootPath => rootPath);
+  const restore = async (input: { checkpointCommit?: string; paths: string[] }) => await controller.execute(project, GitCheckpointRequestSchema.parse({
+    ...identity, ...input, action: "restore", cwd: project.cwd,
+  }));
+
+  await writeFile(path.join(web, "b.txt"), "proposed\n", "utf8");
+  const proposal = await local.createProposal({ ...identity, cwd: web, description: "", paths: ["b.txt"], title: "Proposed" });
+  await writeFile(path.join(api, "a.txt"), "experiment\n", "utf8");
+  await writeFile(path.join(web, "b.txt"), "experiment\n", "utf8");
+  await writeFile(path.join(web, "c.txt"), "experiment\n", "utf8");
+
+  await assert.rejects(restore({ checkpointCommit: proposal.proposalId, paths: ["a.txt", "web:b.txt"] }), /missing the current ref for api/u);
+  assert.equal(await readFile(path.join(api, "a.txt"), "utf8"), "experiment\n", "another root's path never falls back to its baseline");
+
+  await restore({ checkpointCommit: proposal.proposalId, paths: ["web:b.txt"] });
+  assert.equal(await readFile(path.join(web, "b.txt"), "utf8"), "proposed\n");
+
+  await restore({ paths: ["a.txt", "web:c.txt"] });
+  assert.equal(await readFile(path.join(api, "a.txt"), "utf8"), "original\n");
+  assert.equal(await readFile(path.join(web, "c.txt"), "utf8"), "original\n");
+});
+
 test("machine roots claim existing files by absolute path, admit scratch edits, and leave repositories their visible files", async context => {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-machine-arc-");
   context.after(async () => await temporary.dispose());

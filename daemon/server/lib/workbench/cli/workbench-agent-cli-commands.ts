@@ -65,7 +65,7 @@ const LEGACY_CHECKPOINT_MIGRATION_GUIDE = [
   "Content amend: wb git arc propose --amend <proposal-id> --fresh-title <title>.",
   "Message-only proposal: wb git arc reword --proposal <id> --title <title>.",
   "Move approved paths: wb git arc mv. Release clean claims: wb git arc release.",
-  "Restore selected paths: wb git arc restore --ref <ref> -- <path>...",
+  "Restore selected paths: wb git arc restore [--ref <ref>] -- <path>...",
   "Full restore requires explicit user direction and --confirm. Dirty release requires explicit --disown.",
   "",
   "Planning refreshes baselines and reports drift against the previous plan. Inspect that drift before briefing.",
@@ -228,7 +228,7 @@ const HELP_GROUPS: readonly HelpGroupDefinition[] = [
     aliases: [["git", "plan"]],
     commandOrder: ["git plan claims", "git plan start", "git arc start", "git arc wait", "git arc continue", "git arc claims", "git arc status", "git arc release", "git arc compare", "git arc diff", "git arc propose", "git arc reword", "git arc restore"],
     footer: [
-      "Pass paths after -- to restore only those files or directories from the arc snapshot.",
+      "Pass paths after -- to restore only those paths; without --ref claimed files land on the active arc baseline, sealed layers included.",
       "Use --confirm without paths only when the user explicitly requested a full arc restore.",
       "File moves and multi-file replacements: wb git arc edit --help.",
     ].join("\n"),
