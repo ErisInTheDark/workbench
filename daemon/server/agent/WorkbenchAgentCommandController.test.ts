@@ -273,7 +273,7 @@ test("direct Git arc dispatch receives the caller cancellation signal", async ()
   assert.equal(receivedSignal, cancellation.signal);
 });
 
-test("transcript CLI dispatch keeps Workbench target ids and rejects outside-root managed callers", async () => {
+test("transcript CLI dispatch keeps Workbench target ids from any folder and refuses all-projects outside the root", async () => {
   const bodies: object[] = [];
   const controller = new WorkbenchAgentCommandController("http://127.0.0.1:1", {
     ...createBrowsePort(async () => { throw new Error("unexpected Browse dispatch"); }),
@@ -283,13 +283,15 @@ test("transcript CLI dispatch keeps Workbench target ids and rejects outside-roo
   }, undefined, undefined, new WorkbenchAgentCommandLogger({ writeLine: () => {} }));
   const server = await startController(controller);
   try {
-    for (const [cwd, expected] of [["C:/other", 400], ["C:/workbench", 200]] as const) {
-      const body = new URLSearchParams(agentCommandBody(["transcript", "search", "--thread", "wb-target", "--query", "needle"], cwd));
+    const dispatch = async (cwd: string, ...extra: string[]) => {
+      const body = new URLSearchParams(agentCommandBody(["transcript", "search", "--thread", "wb-target", "--query", "needle", ...extra], cwd));
       body.set("callerThreadId", "native-caller");
-      const response = await fetch(`${server.origin}/daemon/agent-command`, { method: "POST", body });
-      assert.equal(response.status, expected);
-    }
-    assert.equal(bodies.length, 1);
+      return (await fetch(`${server.origin}/daemon/agent-command`, { method: "POST", body })).status;
+    };
+    assert.equal(await dispatch("C:/other"), 200);
+    assert.equal(await dispatch("C:/workbench"), 200);
+    assert.equal(await dispatch("C:/other", "--all-projects"), 400);
+    assert.equal(bodies.length, 2);
     assert.ok("threads" in bodies[0]!);
     assert.deepEqual(bodies[0].threads, ["wb-target"]);
   } finally { await server.close(); await controller.dispose(); }

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { testProjectIds } from "workbench-shared/workbench/test-identities";
 import test from "node:test";
 
+import WorkbenchGitRepository from "../lib/workbench/git/WorkbenchGitRepository";
 import type { WorkbenchThreadGitAmendRequest } from "../lib/workbench/git/WorkbenchThreadGit";
 import WorkbenchThreadGitFeature, { findCommitThreadId } from "./WorkbenchThreadGitFeature";
 import WorkbenchThreadTransitionCoordinator from "../turn/WorkbenchThreadTransitionCoordinator";
@@ -52,6 +53,33 @@ test("finds one commit owner across permanent history and live proposal evidence
     { kind: "found", threadId: "thread-three" });
   assert.deepEqual(findCommitThreadId([{ gitArc: arc, threadId: "thread-one" }], commit, ["thread-three"]),
     { kind: "ambiguous", threadIds: ["thread-one", "thread-three"] });
+});
+
+test("a commit's owner lookup names the turn at its author date and how to read it", async () => {
+  const times: Array<[string, number]> = [];
+  let turn: string | null = "turn-proposing";
+  const feature = new WorkbenchThreadGitFeature({
+    identities: threadGitIdentities(),
+    selectionStore: {
+      executeThreadGitSelection: async () => { throw new Error("Unexpected selection"); },
+      findThreadGitCommitOwners: async () => ["thread-one"],
+      readThreadStateProject: (async () => ({ records: [] })) as never,
+    },
+    readTurnAt: async (threadId, time) => { times.push([threadId, time]); return turn; },
+    resolveProjectFromCwd: async cwd => ({ cwd, project: { id: testProjectIds.project } }),
+    transitions: new WorkbenchThreadTransitionCoordinator(),
+  });
+  const lookup = async () => await (await feature.executeRequest({ action: "thread", commit: "HEAD", cwd: process.cwd() })).text();
+
+  const found = await lookup();
+  assert.equal(found.split("\n")[0], "thread-one");
+  assert.match(found, /Proposing turn: turn-proposing/u);
+  assert.ok(found.includes("wb thread recall --thread thread-one --turn turn-proposing"), found);
+  const head = await (await WorkbenchGitRepository.open(process.cwd())).readCommitAt("HEAD");
+  assert.deepEqual(times[0], ["thread-one", Number.parseInt(head!.identity.authorDate, 10) * 1000]);
+
+  turn = null;
+  assert.equal(await lookup(), "thread-one\n");
 });
 
 test("preserves thread Git selection and commit responses behind the daemon boundary", async () => {

@@ -5,7 +5,7 @@
  * - HISTORY_QUERY_ACTIONS: the stored-history actions.
  * - HistoryQuerySchema/HistoryQuery: validate one history query over either view.
  * - HistoryCommandFieldsSchema/HistoryCommandField: every command option, unrefined, for per-action tool schemas.
- * - HistoryCommandQuerySchema/HistoryCommandQuery: add explicit exact-turn provider recovery to CLI queries.
+ * - HistoryCommandQuerySchema/HistoryCommandQuery: add explicit exact-turn provider recovery and all-project reach to CLI queries.
  * - HistoryField/HistoryRow/HistoryRecord/HistorySearchSummary/HistoryPage: bounded results shared by worker and front-ends.
  * - readHistoryAnchor: split a `ref[@offset]` anchor into its item id, derived-record suffix and character offset.
  * - HistoryQueryError: expected invalid query or stale-reference failure, recognisable across reload generations.
@@ -80,12 +80,21 @@ export const HistoryQuerySchema = z.object({
 });
 export type HistoryQuery = z.output<typeof HistoryQuerySchema>;
 
-const providerField = { provider: z.boolean().default(false) };
+const WORKBENCH_ROOT_ONLY = "only threads at the Workbench repository root";
+const commandFields = {
+  provider: z.boolean().default(false),
+  allProjects: z.boolean().default(false).describe(`Read every project; ${WORKBENCH_ROOT_ONLY}`),
+};
 /** Every command option without `action` or cross-field rules, so each action's tool can pick its own. */
-export const HistoryCommandFieldsSchema = z.object({ ...queryFields, ...providerField }).strict();
+export const HistoryCommandFieldsSchema = z.object({
+  ...queryFields,
+  ...commandFields,
+  threads: queryFields.threads.describe("Exact Workbench thread ids; any thread Thread Recall can reach. Without ids a query reads the caller's project"),
+  project: queryFields.project.describe(`Read this project; ${WORKBENCH_ROOT_ONLY}`),
+}).strict();
 export type HistoryCommandField = keyof typeof HistoryCommandFieldsSchema.shape;
 
-export const HistoryCommandQuerySchema = HistoryQuerySchema.safeExtend(providerField).superRefine((query, context) => {
+export const HistoryCommandQuerySchema = HistoryQuerySchema.safeExtend(commandFields).superRefine((query, context) => {
   if (!query.provider) return;
   if (!["read", "search", "show"].includes(query.action)) {
     context.addIssue({ code: "custom", message: "--provider is only valid for read, search and show." });
@@ -156,6 +165,8 @@ export interface HistoryPage {
   gaps: string[];
   /** Reads only: retention-expired turns inside the window with nothing recovered; only explicit recovery restores them. */
   expired: string[];
+  /** Turn-scoped narrative reads only: the turns on either side, so a walk continues past an empty or expired turn. */
+  turnNeighbours: { older: string | null; newer: string | null } | null;
   search: HistorySearchSummary | null;
 }
 

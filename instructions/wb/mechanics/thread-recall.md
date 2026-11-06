@@ -4,6 +4,11 @@
 - Default <tool id="thread_recall" /> returns newest bounded page of chronological narrative history. 
 - `--kind <kind>` filters (repeatable) suit targeted lookups only; emitted HTML tag names match available kinds: `user-message`, `user-steer`, `questionnaire`, `commentary`, `final-answer`, `agent-message`, `plan`, and `proof-of-work`. 
 - Pages walk backward from present; oversized records split at stable newline-preferred boundaries. When older narrative exists, output provides exact filtered `--before <ref>` command for previous non-overlapping page. `--after <ref>` walks forward; `--around <ref>` shows a record with its neighbours.
+<!--
+Agents chasing why old code exists guessed through transcript tools, short ids and search, which cannot see expired turns.
+The tools now lead the way, so this names only the entry points: commit, then git_thread, then a turn recall.
+-->
+- Why old code exists: `git log -S <text>` finds its commit; deferred `git_thread` names thread and proposing turn; recall that `turn`. Naming a turn recovers it when retention expired it, and its page links adjacent turns. Page; search skips expired turns
 <docs tools="thread_recall_search">
 - <tool id="thread_recall_search" />: targeted lookup across all thread history. Words match in any order, `"quoted phrases"` exactly, `-word` excludes. Each hit prints its exact `--around` command
 </docs>

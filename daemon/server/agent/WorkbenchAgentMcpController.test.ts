@@ -1082,18 +1082,12 @@ test("root-only tools follow the resolved caller, not the connection's flags", a
   const flagged = await connectClient(flaggedUrl);
   const call = (client: Client, threadId: string, name: string, args: Record<string, unknown>) => (
     client.callTool({ name, arguments: args, _meta: { threadId } }));
-  const transcriptCall = { server: "wb", tool: "transcript_projects", arguments: {} };
   try {
-    const found = responseText(await call(flagless, "root-thread", "mcp_tools", { server: "wb", query: "transcript" }));
-    assert.match(found, /^wb\/transcript_projects$/mu);
-    const ran = await call(flagless, "root-thread", "mcp_call", transcriptCall);
+    const ran = await call(flagged, "root-thread", "tokens_instructions", {});
     assert.equal(ran.isError, false, responseText(ran));
-    assert.equal(executed.at(-1)?.path, "/internal/transcript");
 
     const dispatches = executed.length;
-    const hidden = responseText(await call(flagged, "other-thread", "mcp_tools", { server: "wb", query: "transcript" }));
-    assert.doesNotMatch(hidden, /wb\/transcript_/u);
-    assert.equal((await call(flagged, "other-thread", "mcp_call", transcriptCall)).isError, true);
+    assert.equal(dispatches, 1);
     assert.equal((await call(flagged, "other-thread", "tokens_instructions", {})).isError, true);
     assert.equal(executed.length, dispatches);
   } finally {

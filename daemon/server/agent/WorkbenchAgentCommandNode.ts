@@ -41,7 +41,6 @@ import { listProjectSkillsFromRoot } from "../lib/workbench/project/project-agen
 import { listActiveWorkbenchSkillDefinitions, locateWorkbenchSkill } from "../lib/workbench-library";
 import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSettings";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { JsonValue } from "../lib/workbench/commands/workbench-agent-command-definition";
@@ -269,8 +268,12 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
     };
     const transcriptCommands = new WorkbenchTranscriptCommandController({
       materializeTurn: async (threadId, turnId, signal) => await materializeTurn(threadId, turnId, signal),
-      projectRoot: context.legacyMigrationProjectRoot,
       read: async (query) => await database.queryHistory(query),
+      resolveProjectId: async (cwd) => (await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Transcripts" })).project.id,
+      requireThreadProject: async (threadId) => {
+        const stored = (await transcript.read({ threadId, turnIds: [], turnLimit: 1 }))?.thread;
+        if (stored) await projectCatalog.resolveAgentEndpointProjectFromCwd(stored.project_root, { endpointName: "Transcripts" });
+      },
     });
     const threadRecall = new WorkbenchThreadRecallController({
       materializeTurn,
@@ -398,13 +401,6 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         // Threads held elsewhere are read on their own daemon, one thread per request so each needs its own grant.
         if (threads.length !== 1 || typeof request.callerThreadId !== "string" || typeof request.cwd !== "string") {
           return plainText("Read one thread from another daemon per transcript command, and do not mix it with local threads.\n", 400);
-        }
-        const normalized = (value: string) => {
-          const resolved = path.resolve(value);
-          return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-        };
-        if (normalized(request.cwd) !== normalized(context.legacyMigrationProjectRoot)) {
-          return plainText("Managed threads can query transcripts only from the running Workbench repository root.\n", 403);
         }
         const caller = await networkCaller(request.callerThreadId, request.cwd);
         const { cwd: _cwd, callerThreadId: _caller, provider: _provider, ...query } = body as Record<string, JsonValue>;
@@ -624,7 +620,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       remoteParentsOf: caller => subagents.remote.parentsOf(caller),
       recall: async (call, signal) => await (await threadRecall.execute({
         body: call.body === null ? undefined : JSON.parse(call.body) as unknown, method: call.search ? "POST" : "GET",
-        searchParams: new URLSearchParams(call.query), threadId: call.threadId,
+        relayed: true, searchParams: new URLSearchParams(call.query), threadId: call.threadId,
       }, signal)).text(),
       transcript: async (body, signal) => await (await transcriptCommands.execute({
         ...body, cwd: context.legacyMigrationProjectRoot, callerThreadId: null, provider: undefined,

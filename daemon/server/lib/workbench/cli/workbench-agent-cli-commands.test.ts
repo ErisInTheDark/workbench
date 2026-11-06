@@ -566,8 +566,20 @@ test("transcript CLI accepts Workbench ids directly and restricts managed caller
     "transcript", "search", "--thread", "wb-thread", "--query", "x", "--provider",
   ], context)).kind, "error");
   assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "read"], context)).kind, "error");
-  assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "search", "--query", "x"], { ...context, cwd: "C:/elsewhere" })).kind, "error");
-  assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "projects"], { ...context, cwd: "C:/elsewhere", callerThreadId: null })).kind, "request");
+  const elsewhere = { ...context, cwd: "C:/elsewhere" };
+  assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "search", "--query", "x"], elsewhere)).kind, "request");
+  for (const wider of [["--all-projects"], ["--project", "other"]]) {
+    assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "search", "--query", "x", ...wider], elsewhere)).kind, "error");
+    assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "search", "--query", "x", ...wider], context)).kind, "request");
+  }
+  assert.equal((await parseWorkbenchAgentCliCommand(["transcript", "projects"], { ...elsewhere, callerThreadId: null })).kind, "request");
+});
+
+test("thread recall carries a named turn to the request", async () => {
+  const parsed = await parseWorkbenchAgentCliCommand(["thread", "recall", "--thread", "wb-thread", "--turn", "turn-id"],
+    { cwd: "C:/workspace", projectRoot: "C:/workbench", callerThreadId: "caller" });
+  assert.equal(parsed.kind, "request");
+  if (parsed.kind === "request") assert.match(parsed.request.path, /[?&]turn=turn-id(?:&|$)/u);
 });
 
 test("parses Markdown toc requests and exposes focused help", async () => {

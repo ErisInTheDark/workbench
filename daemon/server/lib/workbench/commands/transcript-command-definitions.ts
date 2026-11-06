@@ -18,13 +18,13 @@ const DESCRIPTIONS: Record<Action, string> = {
   projects: "List stored transcript projects, roots and thread counts.",
   threads: "Find stored threads by title words and metadata. Returned ids are Workbench thread ids.",
   turns: "List a Workbench thread's turns and stored-body coverage.",
-  search: "Rank indexed transcript items across projects or exact --thread ids: words in any order, \"quoted phrases\", -exclusions. No provider reads.",
+  search: "Rank indexed transcript items of this project or exact --thread ids: words in any order, \"quoted phrases\", -exclusions. No provider reads.",
   read: "Read canonical item data chronologically with trimmed text, newest page or --before/--after/--around an item id.",
   show: "Expand complete item data through bounded pages. Follow the returned continuation.",
   stats: "Count stored threads, turns, materialised turns and item kinds.",
 };
 
-const common = ["threads", "project", "harness", "since", "until", "archived", "settled", "json"] as const;
+const common = ["threads", "project", "allProjects", "harness", "since", "until", "archived", "settled", "json"] as const;
 const itemFilters = ["turn", "kinds", "phase", "tool", "file"] as const;
 const recovery = ["opaque", "provider"] as const;
 
@@ -79,7 +79,7 @@ const joinedQuery: FieldReader = {
 };
 
 const FIELD_READERS: Record<Exclude<HistoryCommandField, "view">, FieldReader> = {
-  threads: repeated("--thread"), project: text("--project"), harness: text("--harness"), turn: text("--turn"),
+  threads: repeated("--thread"), project: text("--project"), allProjects: presence("--all-projects"), harness: text("--harness"), turn: text("--turn"),
   kinds: repeated("--kind"), phase: text("--phase"), tool: text("--tool"), file: text("--file"),
   since: time("--since"), until: time("--until"), archived: toggle("--archived"), settled: toggle("--settled"),
   query: joinedQuery, opaque: presence("--opaque"), item: text("--item"),
@@ -125,9 +125,11 @@ export const WORKBENCH_TRANSCRIPT_COMMANDS = HISTORY_QUERY_ACTIONS.map(action =>
     effects: { readOnly: true, idempotent: true, openWorld: false },
     helpGroups: ["transcript"],
     mcpDeferred: true,
-    audience: { rootOnly: true },
+    // Cross-project reads without named threads are Workbench maintenance, so only the Workbench root may make them.
+    rootOnlyInput: ["allProjects", "project"],
     words: ["transcript", action],
     usage: `wb transcript ${action}${USAGE[action]} [options]`,
+    workbenchRootUsage: `wb transcript ${action}${USAGE[action]} [--all-projects | --project <id>] [options]`,
     inputSchema,
     parseCliArgs: args => inputSchema.parse(readCliFields(action, args)),
     buildRequest(input, { callerThreadId, cwd }) {

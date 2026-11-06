@@ -58,6 +58,8 @@ export interface WorkbenchThreadGitFeatureOptions {
   identities: WorkbenchThreadIdentityController;
   createThreadGit?: (options: { cwd: string; targetWorktree?: string; threadId: WorkbenchThreadId }) => Promise<ThreadGitPort>;
   selectionStore?: Pick<WorkbenchDatabaseController, "executeThreadGitSelection" | "findThreadGitCommitOwners" | "readThreadStateProject">;
+  /** The thread's newest turn created by `time`, epoch milliseconds. */
+  readTurnAt?(threadId: string, time: number): Promise<string | null>;
   resolveProjectFromCwd(cwd: string, ownerThreadId?: string): Promise<{ cwd: string; project?: { id: ProjectId } }>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "read" | "run">;
   /** `wb git integrate`: live claims per thread, and re-running a blocked check whenever claims change. */
@@ -231,7 +233,11 @@ export default class WorkbenchThreadGitFeature {
           if (match.kind === "ambiguous") {
             throw new Error(`Commit ${resolvedCommit.commit} belongs to multiple Workbench threads: ${match.threadIds.join(", ")}`);
           }
-          return new Response(`${match.threadId}\n`, {
+          // Commits land dated at their proposal time, so this finds the turn that proposed them.
+          const authoredAt = Number.parseInt(resolvedCommit.identity.authorDate, 10) * 1000;
+          const turn = Number.isFinite(authoredAt) ? await this.options.readTurnAt?.(match.threadId, authoredAt) : null;
+          const reading = turn ? `Proposing turn: ${turn}\nRead: \`wb thread recall --thread ${match.threadId} --turn ${turn}\`\n` : "";
+          return new Response(`${match.threadId}\n${reading}`, {
             headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8" },
           });
         });

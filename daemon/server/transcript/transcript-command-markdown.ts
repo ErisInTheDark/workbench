@@ -1,5 +1,6 @@
 /*
  * Exports:
+ * - TranscriptCommandSelection: a query as its caller wrote it, before default project scope.
  * - transcriptCommand: build native-shell commands from validated query selections.
  * - transcriptPageOutput: attach exact continuation commands to bounded item data.
  * - renderTranscriptPage: render compact grouped item data, search evidence and incomplete-storage warnings.
@@ -12,11 +13,15 @@ function quote(value: string) {
   return process.platform === "win32" ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function transcriptCommand(query: HistoryQuery) {
+/** A query as its caller wrote it; default project scope is reapplied on each request, so it never prints. */
+export type TranscriptCommandSelection = HistoryQuery & { allProjects?: boolean };
+
+export function transcriptCommand(query: TranscriptCommandSelection) {
   const args = ["wb", "transcript", query.action];
   const value = (flag: string, input: string | number | boolean | null) => { if (input !== null) args.push(flag, quote(String(input))); };
   query.threads.forEach(id => value("--thread", id));
   value("--project", query.project);
+  if (query.allProjects) args.push("--all-projects");
   value("--harness", query.harness);
   value("--turn", query.turn);
   query.kinds.forEach(kind => value("--kind", kind));
@@ -40,7 +45,7 @@ export function transcriptCommand(query: HistoryQuery) {
   return args.join(" ");
 }
 
-export function transcriptPageOutput(query: HistoryQuery, page: HistoryPage) {
+export function transcriptPageOutput(query: TranscriptCommandSelection, page: HistoryPage) {
   const anchors = { before: null, after: null, around: null, cursor: null };
   const first = page.rows[0]?.id;
   const last = page.rows.at(-1)?.id;
@@ -121,7 +126,7 @@ function searchLines(page: HistoryPage) {
   ];
 }
 
-export function renderTranscriptPage(query: HistoryQuery, page: HistoryPage, cwd?: string) {
+export function renderTranscriptPage(query: TranscriptCommandSelection, page: HistoryPage, cwd?: string) {
   const output = transcriptPageOutput(query, page);
   const lines: string[] = [];
   let thread: string | null = null;

@@ -2,7 +2,7 @@
  * Exports:
  * - WorkbenchThreadRecallControllerRequest/WorkbenchThreadRecallControllerOptions: platform-neutral Thread Recall request and history ports.
  * - default WorkbenchThreadRecallController: read or search one thread's narrative through the history engine, recovering
- *   missing turns of the read window from the provider once per request, and render bounded Markdown.
+ *   missing turns of the read window and any named expired turn from the provider once per request, and render bounded Markdown.
  */
 import { z } from "zod";
 import { WORKBENCH_THREAD_RECALL_KINDS, type WorkbenchThreadRecallKind } from "workbench-shared/types";
@@ -13,7 +13,7 @@ import {
   type HistoryPage,
   type HistoryQuery,
 } from "../../../database/history/history-query-contract.ts";
-import { renderThreadRecallHistory, renderThreadRecallSearch, type ThreadRecallWalk } from "./thread-context-recall-markdown.ts";
+import { renderThreadRecallHistory, renderThreadRecallSearch, threadRecallTurnCommand, type ThreadRecallWalk } from "./thread-context-recall-markdown.ts";
 
 /** Recovery reads providers turn by turn; a page recovers at most this many, newest first, and reports the rest. */
 const MAX_RECOVERED_TURNS = 2;
@@ -22,6 +22,8 @@ const DEFAULT_SEARCH_LIMIT = 10;
 export interface WorkbenchThreadRecallControllerRequest {
   body?: unknown;
   method: "GET" | "POST";
+  /** Asked by a thread on another daemon. */
+  relayed?: boolean;
   searchParams: URLSearchParams;
   threadId: string;
 }
@@ -73,6 +75,13 @@ function issues(error: z.ZodError) {
   return error.issues.map(issue => `${issue.path.join(".") || "request"}: ${issue.message}`).join("; ");
 }
 
+function expiredWarning(query: HistoryQuery, expired: readonly string[], relayed: boolean) {
+  const shown = `${expired.length} turn(s) in this window expired by retention; only their retained user and assistant text shows.`;
+  if (relayed) return `${shown} Only their own daemon can recover them.`;
+  if (query.turn) return shown;
+  return `${shown} Naming a turn recovers it: \`${threadRecallTurnCommand(query.threads[0]!, expired[0]!)}\``;
+}
+
 export default class WorkbenchThreadRecallController {
   constructor(private readonly options: WorkbenchThreadRecallControllerOptions) {}
 
@@ -94,14 +103,16 @@ export default class WorkbenchThreadRecallController {
 
   /**
    * Read once; when the window holds never-materialised turns, recover the newest few from the provider and read
-   * again. Retention-expired turns are never recovered here: provider recovery can load a whole native session.
+   * again. A retention-expired turn recovers only when named, by a local caller: provider recovery can load a whole
+   * native session, so walks never trigger it and another daemon's caller cannot.
    */
-  async #readWindow(query: HistoryQuery, signal: AbortSignal) {
+  async #readWindow(query: HistoryQuery, relayed: boolean, signal: AbortSignal) {
     const page = await this.options.queryHistory(query);
     const failures: string[] = [];
     let current = page;
-    if (page.gaps.length) {
-      for (const turnId of page.gaps.slice(0, MAX_RECOVERED_TURNS)) {
+    const recoverable = [...page.gaps.slice(0, MAX_RECOVERED_TURNS), ...(query.turn && !relayed ? page.expired : [])];
+    if (recoverable.length) {
+      for (const turnId of recoverable) {
         try {
           await this.options.materializeTurn(query.threads[0]!, turnId, signal);
         } catch (error) {
@@ -115,7 +126,7 @@ export default class WorkbenchThreadRecallController {
     const warnings = [
       ...failures.map(failure => `Provider recovery failed for ${failure}.`),
       ...(current.gaps.length ? [`${current.gaps.length} turn(s) in this window are not stored locally yet.`] : []),
-      ...(current.expired.length ? [`${current.expired.length} turn(s) in this window expired by retention; only their retained user and assistant text shows. \`wb transcript read --thread <id> --turn <turn> --provider\` recovers one explicitly.`] : []),
+      ...(current.expired.length ? [expiredWarning(query, current.expired, relayed)] : []),
     ];
     return { page: current, warnings };
   }
@@ -135,7 +146,7 @@ export default class WorkbenchThreadRecallController {
       walk = { direction: anchor.direction, offset: parsed.offset, ref: parsed.part ? `${parsed.itemId}:${parsed.part}` : parsed.itemId };
     }
     const query = HistoryQuerySchema.parse({
-      action: "read", view: "narrative", threads: [threadId], kinds: kinds ?? [],
+      action: "read", view: "narrative", threads: [threadId], kinds: kinds ?? [], turn: readString(searchParams.get("turn")) || null,
       ...(anchor ? { [anchor.direction]: anchor.value } : {}),
     });
     return { kinds, query, walk };
@@ -161,8 +172,8 @@ export default class WorkbenchThreadRecallController {
       if (request.method === "GET") {
         const { kinds, query, walk } = this.#historyRequest(threadId, request.searchParams);
         const { hiddenChecklists, storedId } = await this.#prepare(threadId, signal);
-        const { page, warnings } = await this.#readWindow({ ...query, hiddenChecklists, threads: [storedId] }, signal);
-        return markdownResponse(renderThreadRecallHistory({ kinds, page, threadId: storedId, walk, warnings }));
+        const { page, warnings } = await this.#readWindow({ ...query, hiddenChecklists, threads: [storedId] }, request.relayed ?? false, signal);
+        return markdownResponse(renderThreadRecallHistory({ kinds, page, threadId: storedId, turn: query.turn, walk, warnings }));
       }
       const { kinds, limit, query, text } = this.#searchRequest(threadId, await request.body);
       const { hiddenChecklists, storedId } = await this.#prepare(threadId, signal);

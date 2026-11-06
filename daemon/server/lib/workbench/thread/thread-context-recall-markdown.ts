@@ -1,8 +1,9 @@
 /*
  * Exports:
  * - ThreadRecallWalk: which way a history page reads from its anchor.
+ * - threadRecallTurnCommand: the exact command reading one turn.
  * - renderThreadRecallHistory: fit one chronological narrative window into the response budget, splitting an oversized
- *   record at newline-preferred offsets, with exact older/newer continuation commands.
+ *   record at newline-preferred offsets, with exact older/newer continuation commands and adjacent-turn links.
  * - renderThreadRecallSearch: render ranked search hits with match evidence and one exact `--around` command per hit.
  */
 import {
@@ -29,8 +30,13 @@ function kindFlags(kinds: readonly WorkbenchThreadRecallKind[] | null) {
   return (kinds ?? []).map(kind => ` --kind ${kind}`).join("");
 }
 
-function historyCommand(threadId: string, kinds: readonly WorkbenchThreadRecallKind[] | null, anchor?: { flag: string; ref: string }) {
-  return `wb thread recall --thread ${commandValue(threadId)}${kindFlags(kinds)}${anchor ? ` --${anchor.flag} ${commandValue(anchor.ref)}` : ""}`;
+function historyCommand(threadId: string, kinds: readonly WorkbenchThreadRecallKind[] | null, { anchor, turn }: { anchor?: { flag: string; ref: string }; turn?: string | null } = {}) {
+  return `wb thread recall --thread ${commandValue(threadId)}${kindFlags(kinds)}${turn ? ` --turn ${commandValue(turn)}` : ""}${anchor ? ` --${anchor.flag} ${commandValue(anchor.ref)}` : ""}`;
+}
+
+/** The command that reads one turn, recovering it when retention expired it. */
+export function threadRecallTurnCommand(threadId: string, turn: string) {
+  return historyCommand(threadId, null, { turn });
 }
 
 function escapeAttribute(value: string) {
@@ -60,8 +66,8 @@ function join(parts: readonly string[]) {
   return parts.map(part => part.trim()).filter(Boolean).join("\n\n");
 }
 
-function header(walk: ThreadRecallWalk, kinds: readonly WorkbenchThreadRecallKind[] | null, threadId: string, warnings: readonly string[]) {
-  const kindLine = `Kinds: ${kinds?.join(", ") ?? "all"}`;
+function header(walk: ThreadRecallWalk, kinds: readonly WorkbenchThreadRecallKind[] | null, threadId: string, turn: string | null, warnings: readonly string[]) {
+  const kindLine = `Kinds: ${kinds?.join(", ") ?? "all"}${turn ? `\n\nTurn: ${turn}` : ""}`;
   const notes = warnings.map(warning => `Warning: ${warning}`);
   if (walk.direction === "latest") {
     return join([
@@ -73,7 +79,7 @@ function header(walk: ThreadRecallWalk, kinds: readonly WorkbenchThreadRecallKin
   return join([
     walk.direction === "before" ? "# Thread Recall History — Historical Page" : "# Thread Recall Context",
     "WARNING: Newer thread evidence may be omitted from this page. Do not infer the current objective or approval state from this page alone.",
-    kindLine, `Return to newest: \`${historyCommand(threadId, kinds)}\``, ...notes,
+    kindLine, `Return to newest: \`${historyCommand(threadId, kinds, { turn })}\``, ...notes,
   ]);
 }
 
@@ -102,10 +108,11 @@ function cut(text: string, from: number, to: number, fits: (offset: number) => b
   return newline >= best && from - (newline + 1) >= MIN_PREFERRED_CHUNK_CHARACTERS ? newline + 1 : best;
 }
 
-export function renderThreadRecallHistory({ kinds, page, threadId, walk, warnings }: {
+export function renderThreadRecallHistory({ kinds, page, threadId, turn, walk, warnings }: {
   kinds: readonly WorkbenchThreadRecallKind[] | null;
-  page: Pick<HistoryPage, "records" | "older" | "newer">;
+  page: Pick<HistoryPage, "records" | "older" | "newer" | "turnNeighbours">;
   threadId: string;
+  turn: string | null;
   walk: ThreadRecallWalk;
   warnings: readonly string[];
 }) {
@@ -124,11 +131,12 @@ export function renderThreadRecallHistory({ kinds, page, threadId, walk, warning
     const last = shown.at(-1);
     const olderRef = first && first.start > 0 ? `${first.record.ref}@${first.start}` : first && older ? first.record.ref : null;
     const newerRef = last && last.end < last.record.text.length ? `${last.record.ref}@${last.end}` : last && newer ? last.record.ref : null;
+    const adjacentTurn = (label: string, id: string | null | undefined) => id ? [`${label} turn: \`${historyCommand(threadId, kinds, { turn: id })}\``] : [];
     return join([
-      header(walk, kinds, threadId, warnings),
-      ...(olderRef ? [`Older: \`${historyCommand(threadId, kinds, { flag: "before", ref: olderRef })}\``] : []),
+      header(walk, kinds, threadId, turn, warnings),
+      ...(olderRef ? [`Older: \`${historyCommand(threadId, kinds, { turn, anchor: { flag: "before", ref: olderRef } })}\``] : adjacentTurn("Older", page.turnNeighbours?.older)),
       ...(shown.length ? shown.map(chunk => recordTag(chunk.record, chunk.record.text.slice(chunk.start, chunk.end), chunk)) : ["No records in this window."]),
-      ...(newerRef ? ["---", `Newer: \`${historyCommand(threadId, kinds, { flag: "after", ref: newerRef })}\``] : []),
+      ...(newerRef ? ["---", `Newer: \`${historyCommand(threadId, kinds, { turn, anchor: { flag: "after", ref: newerRef } })}\``] : adjacentTurn("Newer", page.turnNeighbours?.newer)),
     ]);
   };
   const fits = (shown: readonly Chunk[]) => render(shown).length <= WORKBENCH_THREAD_RECALL_MAX_RESPONSE_CHARACTERS;
@@ -155,7 +163,7 @@ function searchCommand(threadId: string, query: string, kinds: readonly Workbenc
 export function renderThreadRecallSearch({ kinds, limit, page, query, threadId }: {
   kinds: readonly WorkbenchThreadRecallKind[] | null;
   limit: number;
-  page: Pick<HistoryPage, "records" | "nextCursor" | "search">;
+  page: Pick<HistoryPage, "records" | "nextCursor" | "search" | "coverage">;
   query: string;
   threadId: string;
 }) {
@@ -169,11 +177,12 @@ export function renderThreadRecallSearch({ kinds, limit, page, query, threadId }
     `Matches: ${summary.complete.toLocaleString("en-US")} with every term · ${summary.partial.toLocaleString("en-US")} with some; best first.`,
     `Terms: ${summary.terms.map(term => `${term.term} ${term.hits}`).join(" · ")}`,
     ...(summary.indexed < 1 ? [`Index still building (${Math.floor(summary.indexed * 100)}%); some older records are not searchable yet.`] : []),
+    ...(page.coverage.expiredTurns ? [`${page.coverage.expiredTurns} turn(s) expired by retention; search sees only their retained text.`] : []),
     ...summary.corrections.map(correction => `Searched \`${correction.to}\` for \`${correction.from}\`, which matched nothing.`),
     ...(page.records.length ? [] : ["No records match. Try fewer or different words."]),
     ...page.records.flatMap(record => [
       recordTag(record, excerpt(record.excerpt ?? record.text)),
-      `Context: \`${historyCommand(threadId, null, { flag: "around", ref: record.ref })}\``,
+      `Context: \`${historyCommand(threadId, null, { anchor: { flag: "around", ref: record.ref } })}\``,
     ]),
     ...(page.nextCursor ? ["---", `More: \`${searchCommand(threadId, query, kinds, limit, page.nextCursor)}\``] : []),
   ]);

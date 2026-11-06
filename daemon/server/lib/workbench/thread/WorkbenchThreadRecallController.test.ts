@@ -102,6 +102,8 @@ function createHarness({
       })!;
       materializations.push(turnId === oldTurn.turnId ? "turn-old" : turnId);
       if (failRecovery) throw new Error("provider unavailable");
+      database.prepare("DELETE FROM thread_turn_payload_retention WHERE turn_id = ?").run(oldTurn.turnId);
+      database.prepare("DELETE FROM thread_turn_materializations WHERE turn_id = ?").run(oldTurn.turnId);
       repository.settle([window([
         thread(owner), { ...turn("turn-old", 0, owner), turnId: oldTurn.turnId },
         { ...item("turn-old", "user-old", "older matching user", "user", owner), turnId: oldTurn.turnId },
@@ -115,8 +117,8 @@ function createHarness({
     resolveProjectFromCwd: async () => {},
   });
   const canonicalId = () => canonical()?.threadId ?? "thread-one";
-  const get = async (params: Record<string, string> = {}) => await controller.execute({
-    method: "GET", searchParams: new URLSearchParams(params), threadId: canonicalId(),
+  const get = async (params: Record<string, string> = {}, relayed = false) => await controller.execute({
+    method: "GET", relayed, searchParams: new URLSearchParams(params), threadId: canonicalId(),
   }, new AbortController().signal);
   const search = async (body: unknown) => await controller.execute({
     body, method: "POST", searchParams: new URLSearchParams(), threadId: canonicalId(),
@@ -189,6 +191,70 @@ test("retention-expired turns are never recovered from the provider and the page
     const text = await (await harness.get()).text();
     assert.match(text, /expired by retention/u);
     assert.deepEqual(harness.materializations, ["turn-old"]);
+  } finally { harness.close(); }
+});
+
+function oldTurnOf(harness: ReturnType<typeof createHarness>) {
+  return harness.database.prepare("SELECT id FROM thread_turns WHERE turn_index = 0").pluck().get() as string;
+}
+
+/** The first read stores the old turn through ordinary recovery; retention then removes its payload. */
+async function expireOldTurn(harness: ReturnType<typeof createHarness>) {
+  await harness.get();
+  const oldTurnId = oldTurnOf(harness);
+  harness.database.prepare("INSERT INTO thread_turn_payload_retention(turn_id, expired_at) VALUES (?, 1)").run(oldTurnId);
+  harness.database.prepare("DELETE FROM thread_items WHERE turn_id = ?").run(oldTurnId);
+  harness.materializations.length = 0;
+  return oldTurnId;
+}
+
+test("naming an expired turn recovers it and links its neighbours; unscoped walks only offer the command", async () => {
+  const harness = createHarness();
+  try {
+    const oldTurnId = await expireOldTurn(harness);
+    const unscoped = await (await harness.get()).text();
+    assert.deepEqual(harness.materializations, []);
+    assert.ok(unscoped.includes(`--turn ${oldTurnId}`), unscoped);
+    assert.doesNotMatch(unscoped, /wb transcript/u);
+
+    const named = await (await harness.get({ turn: oldTurnId })).text();
+    assert.deepEqual(harness.materializations, ["turn-old"]);
+    assert.match(named, /older matching user/u);
+    assert.doesNotMatch(named, /latest agent words/u);
+    assert.match(named, /Newer turn: `wb thread recall --thread \S+ --turn \S+`/u);
+    assert.doesNotMatch(named, /Older turn:/u);
+  } finally { harness.close(); }
+});
+
+test("a relayed caller never recovers an expired turn", async () => {
+  const harness = createHarness();
+  try {
+    const oldTurnId = await expireOldTurn(harness);
+    const text = await (await harness.get({ turn: oldTurnId }, true)).text();
+    assert.deepEqual(harness.materializations, []);
+    assert.match(text, /own daemon/u);
+  } finally { harness.close(); }
+});
+
+test("a failed recovery of a named turn still links its neighbours", async () => {
+  const harness = createHarness({ failRecovery: true });
+  try {
+    await harness.get();
+    const response = await harness.get({ turn: oldTurnOf(harness) });
+    const text = await response.text();
+    assert.equal(response.status, 200, text);
+    assert.match(text, /Provider recovery failed/u);
+    assert.match(text, /Newer turn:/u);
+  } finally { harness.close(); }
+});
+
+test("search admits that expired turns are outside its reach", async () => {
+  const harness = createHarness();
+  try {
+    await expireOldTurn(harness);
+    while (harness.index.backfillStep());
+    const text = await (await harness.search({ action: "search", query: "nothing-like-this" })).text();
+    assert.match(text, /1 turn\(s\) expired by retention/u);
   } finally { harness.close(); }
 });
 

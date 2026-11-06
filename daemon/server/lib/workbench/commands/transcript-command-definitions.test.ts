@@ -13,7 +13,7 @@ function command(action: string) {
 }
 
 const equivalents: [action: string, cli: string[], json: object][] = [
-  ["projects", ["--project", "p", "--limit", "5"], { project: "p", limit: 5 }],
+  ["projects", ["--limit", "5"], { limit: 5 }],
   ["threads", ["--query", "a", "--archived", "true"], { query: "a", archived: true }],
   ["turns", ["--thread", "t", "--limit", "3"], { threads: ["t"], limit: 3 }],
   ["search", ["--query", "a", "--query", "-x", "--kind", "tool", "--thread", "t", "--turn", "u", "--provider"],
@@ -30,6 +30,16 @@ test("each transcript tool builds the same request from CLI options and from JSO
     const fromJson = await command(action).buildRequestFromJson(json, context);
     assert.deepEqual(fromJson.body, fromCli.body, action);
     assert.equal(fromJson.body?.action, action);
+  }
+});
+
+test("reading beyond the caller's project takes a Workbench root thread, over CLI and MCP alike", async () => {
+  const atRoot = { ...context, workbenchRoot: true };
+  const wider: [string[], object][] = [[["--project", "p"], { project: "p" }], [["--all-projects"], { allProjects: true }]];
+  for (const [cli, json] of wider) {
+    await assert.rejects(command("projects").buildRequestFromCli(cli, context), /Workbench repository root/u);
+    await assert.rejects(command("projects").buildRequestFromJson(json, context), /Workbench repository root/u);
+    assert.deepEqual((await command("projects").buildRequestFromJson(json, atRoot)).body, (await command("projects").buildRequestFromCli(cli, atRoot)).body);
   }
 });
 

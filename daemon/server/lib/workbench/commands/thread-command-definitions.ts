@@ -107,34 +107,36 @@ const recallSearch = defineWorkbenchAgentCommand({
 
 const recall = defineWorkbenchAgentCommand({
   aliases: [["thread", "context"]],
-  description: "Read filtered history newest-first, or walk --before/--after/--around a ref.",
+  description: "Read filtered history newest-first, walk --before/--after/--around a ref, or read one --turn, recovering it if retention expired it.",
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["thread", "thread-recall"],
   mcpCodeModeEligible: true,
   words: ["thread", "recall"],
-  usage: "wb thread recall [--thread <id>] [--kind <kind>...] [--before <ref> | --after <ref> | --around <ref>]",
+  usage: "wb thread recall [--thread <id>] [--turn <id>] [--kind <kind>...] [--before <ref> | --after <ref> | --around <ref>]",
   inputSchema: z.object({
     after: requiredText.optional(),
     around: requiredText.optional(),
     before: requiredText.optional(),
     kinds: recallKinds,
     threadId: requiredText.optional(),
+    turn: requiredText.optional(),
   }).strict(),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { repeatable: ["--kind"], values: ["--thread", "--before", "--after", "--around"] });
+    const flags = new WorkbenchAgentCommandFlags(args, { repeatable: ["--kind"], values: ["--thread", "--turn", "--before", "--after", "--around"] });
     return {
       after: flags.optional("--after") ?? undefined,
       around: flags.optional("--around") ?? undefined,
       before: flags.optional("--before") ?? undefined,
       kinds: recallKinds.parse(flags.repeated("--kind")),
       threadId: flags.optional("--thread") ?? undefined,
+      turn: flags.optional("--turn") ?? undefined,
     };
   },
   buildRequest(input, { callerThreadId, cwd }) {
     return getWorkbenchAgentCommand(queryWorkbenchAgentCommandPath(
       `/api/thread-context/${encodeURIComponent(targetThreadId(input.threadId, callerThreadId))}`,
       {
-        after: input.after ?? null, around: input.around ?? null, before: input.before ?? null, kind: input.kinds ?? [],
+        after: input.after ?? null, around: input.around ?? null, before: input.before ?? null, kind: input.kinds ?? [], turn: input.turn ?? null,
         ...recallCaller(callerThreadId, cwd),
       },
     ));

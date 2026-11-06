@@ -150,7 +150,7 @@ export default class WorkbenchHistoryQueryRepository {
   }
 
   private page(coverage: Coverage, page: Partial<HistoryPage>): HistoryPage {
-    return { rows: [], records: [], coverage, nextCursor: null, older: false, newer: false, gaps: [], expired: [], search: null, ...page };
+    return { rows: [], records: [], coverage, nextCursor: null, older: false, newer: false, gaps: [], expired: [], turnNeighbours: null, search: null, ...page };
   }
 
   private cursor(query: HistoryQuery): Cursor {
@@ -364,13 +364,21 @@ export default class WorkbenchHistoryQueryRepository {
     const low = query.after ? anchorTurn! : older && known.length ? Math.min(...known) : -1;
     const high = query.before ? anchorTurn! : newer && known.length ? Math.max(...known) : Number.MAX_SAFE_INTEGER;
     const select = (condition: string) => this.database.prepare(`SELECT tr.id FROM thread_turns tr
-      WHERE tr.thread_id = ? AND tr.turn_index BETWEEN ? AND ? AND ${condition}
-      ORDER BY tr.turn_index DESC LIMIT ${MAX_GAPS}`).pluck().all(threadId, low, high) as string[];
+      WHERE tr.thread_id = ? AND tr.turn_index BETWEEN ? AND ? AND (? IS NULL OR tr.id = ?) AND ${condition}
+      ORDER BY tr.turn_index DESC LIMIT ${MAX_GAPS}`).pluck().all(threadId, low, high, query.turn, query.turn) as string[];
     return {
       gaps: select("NOT EXISTS (SELECT 1 FROM thread_turn_materializations m WHERE m.turn_id = tr.id)"),
       expired: select(`EXISTS (SELECT 1 FROM thread_turn_payload_retention r WHERE r.turn_id = tr.id)
         AND NOT EXISTS (SELECT 1 FROM thread_items i WHERE i.turn_id = tr.id)`),
     };
+  }
+
+  private turnNeighbours(turnId: string | null) {
+    if (!turnId) return null;
+    const adjacent = (comparison: "<" | ">", order: "ASC" | "DESC") => (this.database.prepare(`SELECT other.id FROM thread_turns other
+      JOIN thread_turns named ON named.id = ? AND named.thread_id = other.thread_id
+      WHERE other.turn_index ${comparison} named.turn_index ORDER BY other.turn_index ${order} LIMIT 1`).pluck().get(turnId) ?? null) as string | null;
+    return { older: adjacent("<", "DESC"), newer: adjacent(">", "ASC") };
   }
 
   /** Live narrative-capable items and placeable retained narrative of one thread, as one ordered source. */
@@ -509,7 +517,7 @@ export default class WorkbenchHistoryQueryRepository {
       turns = before.turns;
     }
     return this.page(coverage, {
-      records, older, newer,
+      records, older, newer, turnNeighbours: this.turnNeighbours(query.turn),
       ...this.gaps(query.threads[0]!, turns, anchorRow?.turnIndex ?? null, { older, newer, query }),
     });
   }

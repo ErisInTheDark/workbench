@@ -122,7 +122,7 @@ test("only a workflow declaring modes awaits its first one", () => {
 test("only successful unfiltered recalls of the thread's own history join the ledger", () => {
   const recalled = (args: object, failed = false) => readWorkflowLedgerEntries({ threadId: "own", tool: "thread_recall", args, failed });
   assert.deepEqual([recalled({}), recalled({ threadId: "own", before: "ref" })], [[{ kind: "recall" }], [{ kind: "recall" }]]);
-  assert.deepEqual([recalled({ threadId: "other" }), recalled({ kinds: ["plan"] }), recalled({}, true)], [[], [], []]);
+  assert.deepEqual([recalled({ threadId: "other" }), recalled({ kinds: ["plan"] }), recalled({ turn: "one-turn" }), recalled({}, true)], [[], [], [], []]);
 });
 
 test("compaction recovery needs a recall and answered checklist after the latest compaction", () => {

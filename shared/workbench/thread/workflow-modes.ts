@@ -98,7 +98,7 @@ export type WorkflowLedgerEntry =
   | { readonly kind: "recall" };
 
 const ParentMessageSchema = z.object({ parent: z.literal(true) }).passthrough();
-const RecallSchema = z.object({ threadId: z.string().optional(), kinds: z.array(z.string()).optional() }).passthrough();
+const RecallSchema = z.object({ threadId: z.string().optional(), kinds: z.array(z.string()).optional(), turn: z.string().optional() }).passthrough();
 
 function proofOf(state: ThreadState): ProofOfWork | null {
   const parsed = ProofOfWorkSchema.safeParse({
@@ -124,7 +124,7 @@ export function readWorkflowLedgerEntries({ threadId, tool, args, failed }: Work
   if (tool === MESSAGE_AGENT_TOOL) return ParentMessageSchema.safeParse(args).success ? [{ kind: "message", audience: "parent" }] : [];
   if (tool === RECALL_TOOL) {
     const parsed = RecallSchema.safeParse(args);
-    if (!parsed.success || parsed.data.kinds?.length) return [];
+    if (!parsed.success || parsed.data.kinds?.length || parsed.data.turn) return [];
     return !parsed.data.threadId || parsed.data.threadId === threadId ? [{ kind: "recall" }] : [];
   }
   if (tool === LEGACY_MODE_TOOL) {

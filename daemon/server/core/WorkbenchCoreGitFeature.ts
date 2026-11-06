@@ -8,6 +8,7 @@ import { ProjectIdSchema, ThreadReferenceSchema, type WorkbenchThreadId, type Wo
 import { WorkbenchHarnessSchema } from "workbench-shared/workbench/thread/thread-state";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { DaemonDatabaseRegistration, DaemonRuntimeObjects } from "../daemon-runtime-objects";
+import { HistoryQuerySchema } from "../database/history/history-query-contract";
 import { projectRoot } from "../lib/project-root";
 import GitArcRegistry, { getGitArcLiveClaimPaths } from "../lib/workbench/git/GitArcRegistry";
 import type { GitArcThreadIdentityResolver } from "../lib/workbench/git/git-arc-thread-identity";
@@ -117,6 +118,9 @@ export default class WorkbenchCoreGitFeature {
     const resolveGitArcIdentity: GitArcThreadIdentityResolver = async input => await gitArc.resolveThreadIdentity(input);
     this.threadGit = new WorkbenchThreadGitFeature({
       selectionStore: database,
+      readTurnAt: async (threadId, until) => (await database.queryHistory(
+        HistoryQuerySchema.parse({ action: "turns", threads: [threadId], until, limit: 1 }),
+      )).rows[0]?.id ?? null,
       identities,
       resolveProjectFromCwd: async (cwd, ownerThreadId) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Thread Git", ownerThreadId }),
       transitions,

@@ -144,7 +144,7 @@ const amend = defineWorkbenchAgentCommand({
 });
 
 const thread = defineWorkbenchAgentCommand({
-  description: "Print the canonical Workbench thread that owns a committed Git arc proposal.",
+  description: "Print the canonical Workbench thread that owns a committed Git arc proposal, its proposing turn, and the recall command reading that turn.",
   effects: { readOnly: true },
   helpGroups: ["git"],
   mcpDeferred: true,

@@ -1,8 +1,8 @@
 /*
  * Exports:
- * - default WorkbenchTranscriptCommandController: answer `wb transcript` with one history query in the items view per request.
+ * - default WorkbenchTranscriptCommandController: answer `wb transcript` with one history query in the items view per
+ *   request, reading what Thread Recall reaches for named threads and the caller's own project otherwise.
  */
-import path from "node:path";
 import { z } from "zod";
 import {
   HistoryCommandQuerySchema,
@@ -14,37 +14,49 @@ import { renderTranscriptPage, transcriptPageOutput } from "./transcript-command
 
 interface Options {
   materializeTurn(threadId: string, turnId: string, signal: AbortSignal): Promise<void>;
-  projectRoot: string;
   read(query: HistoryQuery): Promise<HistoryPage>;
+  /** The caller's project; fails when its folder belongs to none. */
+  resolveProjectId(cwd: string): Promise<string>;
+  /** Fails for a thread Thread Recall would refuse. */
+  requireThreadProject(threadId: string): Promise<void>;
 }
 
 export default class WorkbenchTranscriptCommandController {
   constructor(private readonly options: Options) {}
+
+  /** Only managed callers narrow: another daemon's caller names granted threads and a person at a terminal reads everything. */
+  async #scoped(query: HistoryQuery, cwd: string, callerThreadId: string | null, allProjects: boolean) {
+    if (callerThreadId === null) return query;
+    try {
+      for (const threadId of query.threads) await this.options.requireThreadProject(threadId);
+      if (query.threads.length || query.project || allProjects) return query;
+      return { ...query, project: await this.options.resolveProjectId(cwd) };
+    } catch (error) {
+      throw new HistoryQueryError(error instanceof Error ? error.message : "This transcript is out of reach.");
+    }
+  }
+
   async execute(input: object, signal: AbortSignal) {
     const parsed = HistoryCommandQuerySchema.safeExtend({
       cwd: z.string().min(1).max(4096), callerThreadId: z.string().min(1).max(4096).nullable(),
     }).safeParse(input);
     if (!parsed.success) return new Response(parsed.error.issues.map(issue => issue.message).join("\n").slice(0, 2000), { status: 400 });
-    const { cwd, callerThreadId, provider, ...query } = parsed.data;
-    const normalized = (value: string) => {
-      const resolved = path.resolve(value);
-      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-    };
-    if (callerThreadId !== null && normalized(cwd) !== normalized(this.options.projectRoot)) {
-      return new Response("Managed threads can query transcripts only from the running Workbench repository root.\n", { status: 403 });
-    }
+    const { cwd, callerThreadId, provider, allProjects, ...query } = parsed.data;
     try {
+      signal.throwIfAborted();
+      const scoped = await this.#scoped(query, cwd, callerThreadId, allProjects);
       signal.throwIfAborted();
       if (provider) {
         await this.options.materializeTurn(query.threads[0]!, query.turn!, signal);
         signal.throwIfAborted();
       }
-      const page = await this.options.read(query);
+      const page = await this.options.read(scoped);
       signal.throwIfAborted();
       const headers = { "Cache-Control": "no-store" };
+      const written = { ...query, allProjects };
       return query.json
-        ? Response.json(transcriptPageOutput(query, page), { headers })
-        : new Response(renderTranscriptPage(query, page, cwd), { headers: { ...headers, "Content-Type": "text/markdown; charset=utf-8" } });
+        ? Response.json(transcriptPageOutput(written, page), { headers })
+        : new Response(renderTranscriptPage(written, page, cwd), { headers: { ...headers, "Content-Type": "text/markdown; charset=utf-8" } });
     } catch (error) {
       if (signal.aborted) throw signal.reason;
       if (HistoryQueryError.is(error)) return new Response(`${error.message.slice(0, 2000)}\n`, { status: 400 });

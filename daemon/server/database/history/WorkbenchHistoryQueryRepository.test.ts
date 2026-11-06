@@ -323,6 +323,26 @@ test("agent messages share one kind across text-envelope and tool-output deliver
   } finally { db.close(); }
 });
 
+test("a turn-scoped narrative read reports that turn however old, and its neighbours by turn order", () => {
+  const { db, read } = fixture();
+  try {
+    for (let index = 1; index <= 25; index += 1) {
+      db.prepare(`INSERT INTO thread_turns(id, thread_id, turn_index, harness_id, native_location, native_thread_id, state, created_at)
+        VALUES (?, 'wb-one', ?, 'codex', '/', 'native-0', 'completed', ?)`).run(`turn-${index}`, index, index * 100);
+      db.prepare("INSERT INTO thread_turn_materializations(turn_id, thread_id, materialized_at) VALUES (?, 'wb-one', 1)").run(`turn-${index}`);
+      db.prepare("INSERT INTO thread_turn_payload_retention(turn_id, expired_at) VALUES (?, 5)").run(`turn-${index}`);
+    }
+    const narrative = (turn: string) => read({ action: "read", view: "narrative", query: null, threads: ["wb-one"], turn });
+    assert.deepEqual(narrative("turn-1").expired, ["turn-1"]);
+    assert.deepEqual(narrative("turn-1").turnNeighbours, { older: "wb-one-turn", newer: "turn-2" });
+    assert.deepEqual(narrative("turn-25").turnNeighbours, { older: "turn-24", newer: null });
+    assert.deepEqual(narrative("wb-one-turn").turnNeighbours, { older: null, newer: "turn-1" });
+    assert.deepEqual(narrative("wb-one-turn").expired, []);
+    assert.equal(read({ action: "read", view: "narrative", query: null, threads: ["wb-one"] }).turnNeighbours, null);
+    assert.deepEqual(read({ action: "turns", query: null, threads: ["wb-one"], until: 350, limit: 1 }).rows.map(row => row.id), ["turn-3"]);
+  } finally { db.close(); }
+});
+
 test("narrative reads show retained text of expired turns and report them apart from unmaterialised ones", () => {
   const { db, read, add } = fixture();
   try {
