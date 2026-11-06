@@ -22,6 +22,7 @@
  * - gatedProofWindows: per gated checklist family, the proofs its modes count.
  */
 import { z } from "zod";
+import { readWorkbenchDeferredCall } from "../mcp/mcp-server-settings.ts";
 import { conformToZodSchema } from "../zod-schema-conformer.ts";
 import {
   mergeProofs, ProofFamilySchema, ProofOfWorkBuckets, ProofOfWorkSchema, readProofOfWorkSubmission, withoutRetiredProofFields,
@@ -118,6 +119,8 @@ function currentThreadStateArgs(args: unknown) {
 
 /** A refused thread_state call still files its proofs; its other changes never applied. Legacy calls count only on success. */
 export function readWorkflowLedgerEntries({ threadId, tool, args, failed }: WorkflowLedgerSource): WorkflowLedgerEntry[] {
+  const deferred = readWorkbenchDeferredCall(tool, args);
+  if (deferred) return readWorkflowLedgerEntries({ threadId, tool: deferred.tool, args: deferred.arguments, failed });
   if (tool === THREAD_STATE_TOOL) {
     const parsed = ThreadStateSchema.safeParse(currentThreadStateArgs(args));
     if (!parsed.success) return [];
@@ -150,10 +153,19 @@ function isWorkbenchCall(item: ThreadItem, tool: string): item is Extract<Thread
   return item.type === "mcpToolCall" && (item.server === "wb" || item.server === "wbex") && item.tool === tool;
 }
 
+/** The thread_state arguments an item carries, directly or through `mcp_call`; undefined for other items. */
+function threadStateArgs(item: ThreadItem): unknown {
+  if (item.type !== "mcpToolCall" || (item.server !== "wb" && item.server !== "wbex")) return undefined;
+  if (item.tool === THREAD_STATE_TOOL) return item.arguments;
+  const deferred = readWorkbenchDeferredCall(item.tool, item.arguments);
+  return deferred?.tool === THREAD_STATE_TOOL ? deferred.arguments : undefined;
+}
+
 /** A thread_state call's arguments and whether it applied; null for other items and unreadable arguments. */
 export function readThreadStateCall(item: ThreadItem) {
-  if (!isWorkbenchCall(item, THREAD_STATE_TOOL)) return null;
-  const parsed = conformToZodSchema(ThreadStateSchema, currentThreadStateArgs(item.arguments));
+  const args = threadStateArgs(item);
+  if (args === undefined || item.type !== "mcpToolCall") return null;
+  const parsed = conformToZodSchema(ThreadStateSchema, currentThreadStateArgs(args));
   if (!parsed.success || parsed.discardedPaths.length) return null;
   return { state: parsed.data, applied: item.status === "completed" && !item.error, settled: item.status !== "inProgress" };
 }

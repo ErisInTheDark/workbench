@@ -7,10 +7,13 @@ before they will look; provider-native tool search does not cover them. Agents g
 instead of telling the user a disabled tool could do it, so the fallback search and request are named here.
 Rarely used Workbench commands are deferred to keep the preloaded tool list small; server `wb` is how MCP-only agents
 find them without shell quoting. Servers report output paths relative to their own working directory, which agents
-could not see, so agents lost downloaded files; naming where local servers run lets them find it. -->
+could not see, so agents lost downloaded files; naming where local servers run lets them find it.
+A thread's tool list is part of its prefix, so a reload cannot change it without losing the prompt cache; these two tools
+are the door to anything newer, so a live thread needs no refresh. -->
 User-added MCP server tools and deferred Workbench tools are not loaded directly:
 - find: <tool id="mcp_tools" /> (server `wb` = Workbench's own)
 - run: <tool id="mcp_call" />
+- your tool list froze with your prefix: a Workbench tool or field you lack may exist. A `wb` query shows current schemas; `mcp_call` runs any Workbench tool
 - no enabled tool fits: search with `includeDisabled`, then ask user to enable one via <tool id="mcp_request" />
 - server you started: ask to connect its URL via `wb/mcp_connect`; lasts until turn ends
 - changed cli server code: restart via `wb/mcp_reload`

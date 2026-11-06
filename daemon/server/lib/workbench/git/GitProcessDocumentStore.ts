@@ -35,9 +35,12 @@ export default class GitProcessDocumentStore {
     return paths.length ? this.repository.normalizePaths([...paths]) : [];
   }
 
-  /** Each thread owns one block, so a document two threads list stays hidden until both drop it. Machine repositories have nothing to hide from. */
+  /**
+   * Each thread owns one block per worktree: linked worktrees share one exclude file, so a shared block would let one's sync wipe
+   * another's, and a document two threads list stays hidden until both drop it. Machine repositories have nothing to hide from.
+   */
   private async hide(threadId: string, relativePaths: readonly string[]) {
-    if (!this.repository.machine) await syncGitInfoExclude(this.repository.root, `process documents ${threadId}`, relativePaths);
+    if (!this.repository.machine) await syncGitInfoExclude(this.repository.root, `process documents ${threadId} ${this.repository.root}`, relativePaths);
   }
 
   /** `info/exclude` cannot hide tracked files and a claim is a route into a commit, so both refuse rather than quietly stay committable. */

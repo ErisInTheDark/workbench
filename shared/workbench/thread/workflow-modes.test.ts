@@ -166,6 +166,26 @@ test("refused thread_state calls keep only their proofs; legacy calls count only
   assert.deepEqual(currentProcessDocuments([{ kind: "processDocuments", paths: ["a.md"] }, { kind: "processDocuments", paths: [] }]), []);
 });
 
+test("a Workbench tool run through mcp_call counts as itself; other servers and malformed calls count for nothing", () => {
+  const args = { server: "wb", tool: "thread_state", arguments: { proofs: { "review.coverage": "ok" }, mode: "Review", processDocuments: ["notes.md"] } };
+  assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "mcp_call", args, failed: false }), [
+    reviewed, { kind: "processDocuments", paths: ["notes.md"] }, mode("Review"),
+  ]);
+  assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "mcp_call", args, failed: true }), [reviewed]);
+  assert.deepEqual(readWorkflowLedgerEntries({
+    threadId: "thread", tool: "mcp_call", args: { server: "wb", tool: "message_agent", arguments: { parent: true } }, failed: false,
+  }), [{ kind: "message", audience: "parent" }]);
+  for (const other of [{ ...args, server: "docs" }, { server: "wb" }, { server: "wb", tool: "mcp_call", arguments: args }, [], null]) {
+    assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "mcp_call", args: other, failed: false }), [], JSON.stringify(other));
+  }
+  const item = (server: string, tool: string, itemArgs: unknown) => ({
+    type: "mcpToolCall", id: "i", server, tool, arguments: itemArgs, status: "completed", result: null, error: null, durationMs: 1, appContext: null, pluginId: null, readOnlyHint: false,
+  }) as unknown as Parameters<typeof readModeEntered>[0];
+  assert.equal(readModeEntered(item("wb", "mcp_call", args)), "Review");
+  assert.deepEqual(readFiledProofs(item("wb", "mcp_call", args)), { proofs: { "review.coverage": "ok" } });
+  assert.equal(readModeEntered(item("docs", "mcp_call", args)), null);
+});
+
 test("recorded calls that sent alwaysEditable keep their list, mode and proofs", () => {
   const args = { proofs: { "review.coverage": "ok" }, mode: "Review", alwaysEditable: ["notes.md"] };
   assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "thread_state", args, failed: false }), [

@@ -77,7 +77,7 @@ export function formatWorkbenchToolSection(tools: readonly McpServerTool[], quer
   const queryTerms = terms(query ?? "");
   const matches = rank(tools.map(tool => ({ server: WORKBENCH_MCP_SERVER_NAME, tool, allowed: true })), queryTerms);
   if (!matches.length) {
-    return queryTerms.length ? `No deferred Workbench tools match "${query}".\n` : "No deferred Workbench tools are available.\n";
+    return queryTerms.length ? `No Workbench tools match "${query}".\n` : "No deferred Workbench tools are available.\n";
   }
   return `${section(matches.map(queryTerms.length ? detailed : brief), queryTerms.length ? "\n\n" : "\n")}\n`;
 }

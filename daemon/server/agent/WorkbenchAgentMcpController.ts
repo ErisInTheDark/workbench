@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, caller audience, cancellation, wait deadlines, hosted-shell approval, and command execution ports.
- * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including deferred tools found and run on server `wb` of `mcp_tools`/`mcp_call`, per-caller audience gates, wait timeouts with non-error timed-out results, the transcript-free user-message acknowledgement for providers that host it, text-only results for providers whose model reads structured content, plus the served tool specs for prompt-cost accounting and their per-audience content fingerprint for prefix staleness.
+ * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including any Workbench tool found and run at its current schema on server `wb` of `mcp_tools`/`mcp_call`, with its result kept on request, per-caller audience gates, wait timeouts with non-error timed-out results, the transcript-free user-message acknowledgement for providers that host it, text-only results for providers whose model reads structured content, plus the served tool specs for prompt-cost accounting and their per-audience content fingerprint for prefix staleness.
  */
 import { createHash } from "node:crypto";
 import type http from "node:http";
@@ -120,6 +120,8 @@ export interface WorkbenchAgentMcpControllerOptions {
   isSubagentCaller?: (caller: WorkbenchProviderCaller) => Promise<boolean>;
   /** Why the caller's current workflow mode denies a tool, or null. */
   readModeToolDenial?: (threadId: string, toolName: string, input?: unknown) => Promise<string | null>;
+  /** Saves a Workbench tool's result for the thread, for `mcp_call` with `keep` on server `wb`. */
+  keepToolResult?: (threadId: string, input: { keep: string; keepOnly?: boolean | undefined }, result: CallToolResult) => Promise<CallToolResult>;
   /** Live local capability settings; capability-gated deferred tools are found and run only while enabled. */
   readLocalCapabilities?: () => Promise<WorkbenchLocalCapabilitySettings>;
   /** Whether the caller works at the Workbench repository root, the only audience of root-only commands. */
@@ -161,20 +163,27 @@ function textResult(text: string): CallToolResult {
 type ToolTranscriptIdentity = { tool: string; input: object };
 
 const [MCP_TOOLS_COMMAND, MCP_REQUEST_COMMAND, MCP_CALL_COMMAND] = WORKBENCH_MCP_COMMANDS;
+const isMcpHostingCommand = (definition: WorkbenchAgentCommandDefinition) =>
+  definition === MCP_TOOLS_COMMAND || definition === MCP_REQUEST_COMMAND || definition === MCP_CALL_COMMAND;
 /** The `mcp_*` fields that decide whether a call targets Workbench's own deferred tools. */
 const McpRoutingFieldsSchema = z.object({
   arguments: z.record(z.string(), z.unknown()).optional(),
+  keep: z.string().optional(),
+  keepOnly: z.boolean().optional(),
   query: z.string().optional(),
   server: z.string().optional(),
   tool: z.string().optional(),
 });
 
-/** McpServer's input validation, reproduced for hand-served tools. */
-async function validateToolInput(schema: AnySchema, args: unknown, toolName: string) {
+/** A thread's preloaded tool list froze with its prefix, so a rejection may only mean its schema is older than this daemon. */
+const staleToolListHint = (toolName: string) => `Your tool list may predate this daemon. mcp_tools on server ${WORKBENCH_MCP_SERVER_NAME} with query "${toolName}" shows its current schema; mcp_call runs it.\n`;
+
+/** McpServer's input validation, reproduced for hand-served tools. A hint leads, since typed Git rejections read the message's tail. */
+async function validateToolInput(schema: AnySchema, args: unknown, toolName: string, hint = "") {
   const parsed = await safeParseAsync(normalizeObjectSchema(schema) ?? schema, args);
   if (!parsed.success) {
     throw new McpError(ErrorCode.InvalidParams,
-      `Input validation error: Invalid arguments for tool ${toolName}: ${getParseErrorMessage("error" in parsed ? parsed.error : "Unknown error")}`);
+      `${hint}Input validation error: Invalid arguments for tool ${toolName}: ${getParseErrorMessage("error" in parsed ? parsed.error : "Unknown error")}`);
   }
   return parsed.data;
 }
@@ -261,6 +270,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   private readonly isWorkbenchRootCaller: NonNullable<WorkbenchAgentMcpControllerOptions["isWorkbenchRootCaller"]>;
   private readonly readLocalCapabilities: NonNullable<WorkbenchAgentMcpControllerOptions["readLocalCapabilities"]>;
   private readonly readModeToolDenial: NonNullable<WorkbenchAgentMcpControllerOptions["readModeToolDenial"]>;
+  private readonly keepToolResult: NonNullable<WorkbenchAgentMcpControllerOptions["keepToolResult"]>;
   private readonly createWaitDeadline: NonNullable<WorkbenchAgentMcpControllerOptions["createWaitDeadline"]>;
 
   constructor({
@@ -278,9 +288,11 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     isWorkbenchRootCaller = () => false,
     readLocalCapabilities = async () => DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS,
     readModeToolDenial = async () => null,
+    keepToolResult = async () => { throw new Error("Kept results are not available here."); },
     createWaitDeadline = createWorkbenchMcpWaitDeadline,
   }: WorkbenchAgentMcpControllerOptions) {
     this.readModeToolDenial = readModeToolDenial;
+    this.keepToolResult = keepToolResult;
     this.createWaitDeadline = createWaitDeadline;
     this.injectedExecuteCommand = executeCommand;
     this.executeCommand = executeCommand ?? (async (request, signal) => await requestRegistry.executeCommand(request, signal));
@@ -386,14 +398,18 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     return description.connectionSpansThreads ? { ...scope, projectLocal: true } : scope;
   }
 
-  /** Deferred commands the resolved caller may find, whatever audience its connection declared. */
-  private async callerDeferredCommands(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, tools: WorkbenchProviderTools) {
+  /**
+   * Commands the resolved caller may find, whatever audience its connection declared. A search also finds preloaded tools, so a
+   * thread can read schemas newer than its frozen list; the plain listing stays deferred-only to stay short.
+   */
+  private async callerSearchableCommands(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, tools: WorkbenchProviderTools, query: string | undefined) {
     const caller = await tools.caller(ProviderToolMetadataSchema.parse(call.meta ?? {}), call.signal, { clientScope: scope.clientScope });
-    return this.visibleCommands({
+    const { deferred, direct } = this.visibleCommands({
       ...scope,
       projectLocal: this.isWorkbenchRootCaller(caller),
       subagent: scope.subagent || await this.isSubagentCaller(caller),
-    }, await this.readLocalCapabilities()).deferred;
+    }, await this.readLocalCapabilities());
+    return query ? new Map([...deferred, ...[...direct].filter(([, definition]) => !isMcpHostingCommand(definition))]) : deferred;
   }
 
   private toolSpec(name: string, definition: WorkbenchAgentCommandDefinition, shape: WorkbenchMcpInputShape): Tool & { description: string } {
@@ -475,15 +491,15 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       }
       const { direct } = this.visibleCommands(this.listingScope(scope, description));
       // `mcp_call` reaches root-only and capability-gated commands from any connection; `prepareCommand` gates each caller.
-      const { deferred } = this.visibleCommands({ ...scope, projectLocal: true });
+      const { deferred, direct: reachableDirect } = this.visibleCommands({ ...scope, projectLocal: true });
       const definition = direct.get(call.name);
       if (!definition) throw new McpError(ErrorCode.InvalidParams, `Tool ${call.name} not found`);
-      const input = await validateToolInput(getWorkbenchMcpCommandInputSchema(definition, shape), call.arguments, call.name) as object;
+      const input = await validateToolInput(getWorkbenchMcpCommandInputSchema(definition, shape), call.arguments, call.name, staleToolListHint(call.name)) as object;
       const routing = McpRoutingFieldsSchema.parse(input);
       const workbenchServer = routing.server === WORKBENCH_MCP_SERVER_NAME;
       const transcript = { tool: call.name, input };
       if (definition === MCP_TOOLS_COMMAND && (workbenchServer || (!routing.server && deferred.size))) {
-        const findable = await this.callerDeferredCommands(scope, call, tools);
+        const findable = await this.callerSearchableCommands(scope, call, tools, routing.query);
         const section = formatWorkbenchToolSection([...findable].map(([name, tool]) => this.toolSpec(name, tool, shape)), routing.query);
         const result = workbenchServer
           ? await this.observeTool(call.name, input, call.meta, scope.clientScope, call.signal, tools, async () => textResult(section))
@@ -501,8 +517,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         };
       }
       const target = definition === MCP_CALL_COMMAND && workbenchServer
-        ? await this.deferredTarget(deferred, routing, shape)
+        ? await this.workbenchTarget(new Map([...deferred, ...reachableDirect]), routing, shape)
         : { definition, input };
+      const keep = definition === MCP_CALL_COMMAND && workbenchServer && routing.keep ? { keep: routing.keep, keepOnly: routing.keepOnly } : null;
+      if (definition === MCP_CALL_COMMAND && workbenchServer && routing.keepOnly && !keep) throw new McpError(ErrorCode.InvalidParams, "keepOnly needs keep.");
       // The provider's call id orders this call in its tool batch; the provider reports each call's result there.
       const toolUseKey = call.batchTurns && !target.definition.effects.readOnly ? readToolUseKey(description, shape, call) : null;
       if (toolUseKey) {
@@ -511,11 +529,15 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       }
       const { input: commandInput, timeoutMs } = splitWorkbenchMcpWaitTimeout(target.definition, shape, target.input);
       if (target.definition.mcpRuntimeDrainPolicy === "preserve-across-reload") {
+        if (keep) throw new McpError(ErrorCode.InvalidParams, `${getWorkbenchAgentCommandToolName(target.definition)} is a long wait, so its result cannot be kept.`);
         return await this.detachTool(target.definition, commandInput, timeoutMs, call, scope.clientScope, tools, transcript);
       }
       return {
         kind: "result",
-        result: await this.callTool(target.definition, commandInput, call.meta, scope.clientScope, call.requestId, call.signal, tools, { transcript }),
+        result: await this.callTool(target.definition, commandInput, call.meta, scope.clientScope, call.requestId, call.signal, tools, {
+          transcript,
+          ...keep ? { decorate: async (result: CallToolResult) => await this.keepResult(scope, call, tools, keep, result) } : {},
+        }),
       };
     } catch (error) {
       return { kind: "result", result: toolError(error) };
@@ -536,15 +558,25 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     };
   }
 
-  private async deferredTarget(
-    deferred: ReadonlyMap<string, WorkbenchAgentCommandDefinition>, routing: z.infer<typeof McpRoutingFieldsSchema>,
+  /** The caller's own thread keeps the result, so a connection serving many threads never crosses them. */
+  private async keepResult(
+    scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall, tools: WorkbenchProviderTools,
+    keep: { keep: string; keepOnly?: boolean | undefined }, result: CallToolResult,
+  ) {
+    const caller = await tools.caller(ProviderToolMetadataSchema.parse(call.meta ?? {}), call.signal, { clientScope: scope.clientScope });
+    return await this.keepToolResult(caller.threadId, keep, result);
+  }
+
+  /** Any Workbench tool but the three that host this search, so a live thread reaches tools newer than its frozen list. */
+  private async workbenchTarget(
+    commands: ReadonlyMap<string, WorkbenchAgentCommandDefinition>, routing: z.infer<typeof McpRoutingFieldsSchema>,
     shape: WorkbenchMcpInputShape,
   ) {
     const name = routing.tool ?? "";
-    const definition = deferred.get(name);
-    if (!definition) {
+    const definition = commands.get(name);
+    if (!definition || isMcpHostingCommand(definition)) {
       throw new McpError(ErrorCode.InvalidParams,
-        `${WORKBENCH_MCP_SERVER_NAME}/${name} is not a deferred Workbench tool. Find one with mcp_tools on server ${WORKBENCH_MCP_SERVER_NAME}.`);
+        `${WORKBENCH_MCP_SERVER_NAME}/${name} cannot run through mcp_call. Find Workbench tools with mcp_tools on server ${WORKBENCH_MCP_SERVER_NAME}.`);
     }
     const input = await validateToolInput(
       getWorkbenchMcpCommandInputSchema(definition, shape), routing.arguments ?? {}, `${WORKBENCH_MCP_SERVER_NAME}/${name}`,
@@ -872,10 +904,10 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     {
       decorate = result => result,
       transcript = { tool: getWorkbenchAgentCommandToolName(definition), input },
-    }: { decorate?: (result: CallToolResult) => CallToolResult; transcript?: ToolTranscriptIdentity } = {},
+    }: { decorate?: (result: CallToolResult) => CallToolResult | Promise<CallToolResult>; transcript?: ToolTranscriptIdentity } = {},
   ) {
     const execute = async (reference: WorkbenchToolTranscriptReference | null) =>
-      decorate(await this.executeTool(definition, input, meta, clientScope, requestId, signal, tools, reference));
+      await decorate(await this.executeTool(definition, input, meta, clientScope, requestId, signal, tools, reference));
     if (definition.hideMcpTranscript) {
       return this.observeTool(transcript.tool, {}, meta, clientScope, signal, tools, execute,
         result => ({ content: [], isError: result.isError === true }));

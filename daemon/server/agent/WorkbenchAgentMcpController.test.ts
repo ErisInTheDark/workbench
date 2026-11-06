@@ -437,10 +437,98 @@ test("deferred commands are found and run through server wb without joining the 
     for (const args of [
       { server: "wb", tool: "git_arc_edit_start", arguments: { operations: [] } },
       { server: "wb", tool: "reload", arguments: {} },
-      { server: "wb", tool: "rg", arguments: { args: ["x"] } },
+      { server: "wb", tool: "mcp_call", arguments: { server: "wb", tool: "rg", arguments: {} } },
+      { server: "wb", tool: "mcp_tools", arguments: {} },
+      { server: "wb", tool: "mcp_request", arguments: {} },
     ]) assert.equal((await call("mcp_call", args)).isError, true, JSON.stringify(args));
     assert.equal((await call("mcp_request", { server: "wb", tool: "git_arc_tree", reason: "need it" })).isError, true);
     assert.equal(executed.length, dispatchesBefore);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("a live thread reaches preloaded tools at their current schema through server wb, and a rejected call says how", async () => {
+  const executed: WorkbenchAgentCommandRequest[] = [];
+  const denied: Array<{ tool: string; input: unknown }> = [];
+  const controller = codexController({
+    executeCommand: async (request) => {
+      executed.push(request);
+      return new Response("ran\n");
+    },
+    readModeToolDenial: async (_threadId, tool, input) => {
+      denied.push({ tool, input });
+      return tool === "todo" ? "Inspect mode denies todo." : null;
+    },
+    getReloadScopeCatalog: () => reloadCatalog,
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    lifecycleLogError: () => {},
+    requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/workspace" } } }),
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  const call = (name: string, args: Record<string, unknown>) => client.callTool({ name, arguments: args, _meta: { threadId: "native-thread" } });
+  try {
+    const ran = await call("mcp_call", { server: "wb", tool: "rg", arguments: { args: ["x"] } });
+    assert.equal(ran.isError, false, responseText(ran));
+    assert.equal(executed.length, 1);
+    assert.deepEqual(denied.at(-1), { tool: "rg", input: { args: ["x"] } }, "gates judge the tool that actually runs");
+
+    const refused = await call("mcp_call", { server: "wb", tool: "todo", arguments: {} });
+    assert.equal(refused.isError, true);
+    assert.match(responseText(refused), /Inspect mode denies todo/u);
+    assert.equal(executed.length, 1);
+
+    assert.match(responseText(await call("mcp_tools", { server: "wb", query: "thread state proofs" })), /^wb\/thread_state$/mu);
+    assert.doesNotMatch(responseText(await call("mcp_tools", { server: "wb" })), /^wb\/thread_state: /mu, "a plain listing stays deferred-only");
+    assert.doesNotMatch(responseText(await call("mcp_tools", { server: "wb", query: "run tool" })), /^wb\/mcp_call$/mu);
+
+    const stale = await call("thread_state", { retiredField: ["a"] });
+    assert.equal(stale.isError, true);
+    assert.match(responseText(stale), /may predate this daemon/u);
+    assert.match(responseText(stale), /query "thread_state"/u);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("mcp_call on server wb honours keep and keepOnly, and refuses them where it cannot", async () => {
+  const kept: Array<{ threadId: string; input: unknown }> = [];
+  const controller = codexController({
+    executeCommand: async () => new Response("the whole result\n"),
+    keepToolResult: async (threadId, input, result) => {
+      kept.push({ threadId, input });
+      return input.keepOnly ? { content: [{ type: "text", text: "Kept only.\n" }], isError: false } : result;
+    },
+    getReloadScopeCatalog: () => reloadCatalog,
+    daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    lifecycleLogError: () => {},
+    requestCodex: async request => ({ id: request.id ?? null, result: { thread: { cwd: "C:/workspace" } } }),
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  const call = (args: Record<string, unknown>) => client.callTool({ name: "mcp_call", arguments: args, _meta: { threadId: "native-thread" } });
+  const rg = { server: "wb", tool: "rg", arguments: { args: ["x"] } };
+  try {
+    const only = await call({ ...rg, keep: "found", keepOnly: true });
+    assert.equal(only.isError, false, responseText(only));
+    assert.equal(responseText(only), "Kept only.\n");
+    assert.doesNotMatch(responseText(only), /the whole result/u);
+    assert.equal(kept.length, 1);
+    assert.deepEqual(kept[0]?.input, { keep: "found", keepOnly: true });
+
+    assert.match(responseText(await call({ ...rg, keep: "found" })), /the whole result/u);
+    assert.match(responseText(await call(rg)), /the whole result/u);
+    assert.equal(kept.length, 2, "nothing is kept without keep");
+
+    assert.equal((await call({ ...rg, keepOnly: true })).isError, true);
+    const wait = await call({ server: "wb", tool: "subagent_wait", arguments: { names: ["mira"] }, keep: "found" });
+    assert.equal(wait.isError, true);
+    assert.match(responseText(wait), /long wait/u);
   } finally {
     await client.close();
     await server.close();

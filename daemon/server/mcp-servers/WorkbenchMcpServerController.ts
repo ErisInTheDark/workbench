@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   McpServerEnvReadParamsSchema, McpServerEnvUpdateSchema, McpServerNameSchema, McpServerSettingsUpdateSchema, McpServerSignInFinishParamsSchema,
   McpServerSignInStartParamsSchema, McpServerUrlSchema, type McpServerEnvReadParams, type McpServerEnvSnapshot, type McpServerEnvUpdate,
@@ -584,18 +585,37 @@ export default class WorkbenchMcpServerController {
       const unkept = input.keep && result.isError === true ? "The result was an error, so it was not kept.\n" : "";
       return { text: `${formatMcpToolResult(result)}${linkHint}${unkept}`, isError: result.isError === true };
     }
+    const { keptLine, notes } = await this.#keep(this.options.downloads, caller.threadId, input.keep, result);
+    return {
+      text: input.keepOnly ? `${notes}${keptLine}` : `${formatMcpToolResult(result)}${linkHint}${keptLine}`,
+      isError: false,
+    };
+  }
+
+  async #keep(downloads: NonNullable<WorkbenchMcpServerOptions["downloads"]>, threadId: string, name: string, result: CallToolResult) {
     const value = readMcpResultValue(result);
-    const kept = await this.options.downloads.keep(caller.threadId, input.keep, value);
-    const keptLine = `Kept as \`@result:${kept.name}\` (${describeMcpKeptValue(value, kept.bytes)}). Full JSON: ${kept.path}\n`;
+    const kept = await downloads.keep(threadId, name, value);
     // Notes beside a JSON result, such as a wrapper's truncation warning, still reach a keepOnly caller.
     const notes = typeof value === "string" ? [] : result.content.flatMap(part => {
       if (part.type !== "text") return [];
       try { JSON.parse(part.text); return []; } catch { return [`${part.text}\n`]; }
     });
     return {
-      text: input.keepOnly ? `${notes.join("")}${keptLine}` : `${formatMcpToolResult(result)}${linkHint}${keptLine}`,
-      isError: false,
+      keptLine: `Kept as \`@result:${kept.name}\` (${describeMcpKeptValue(value, kept.bytes)}). Full JSON: ${kept.path}\n`,
+      notes: notes.join(""),
     };
+  }
+
+  /** Keep what one of Workbench's own tools returned, with the same rules a user-added server's result gets. */
+  async keepWorkbenchToolResult(threadId: string, input: { keep: string; keepOnly?: boolean | undefined }, result: CallToolResult): Promise<CallToolResult> {
+    if (!this.options.downloads) throw new Error("Kept results are not available here.");
+    if (result.isError === true) {
+      return { ...result, content: [...result.content, { type: "text", text: "The result was an error, so it was not kept.\n" }] };
+    }
+    const { keptLine, notes } = await this.#keep(this.options.downloads, threadId, input.keep, result);
+    return input.keepOnly
+      ? { content: [{ type: "text", text: `${notes}${keptLine}` }], isError: false }
+      : { ...result, content: [...result.content, { type: "text", text: keptLine }] };
   }
 
   /**

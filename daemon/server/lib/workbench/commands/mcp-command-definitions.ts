@@ -116,7 +116,7 @@ const mcpRequest = defineWorkbenchAgentCommand({
 const mcpCall = defineWorkbenchAgentCommand({
   words: ["mcp", "call"],
   usage: "wb mcp call --server <name> --tool <name> [--arguments-json <json>] [--keep <name> [--keep-only]]",
-  description: "Run one enabled tool on a user-added MCP server. Find tools and their input schemas with mcp_tools first. keep saves the result as a JSON file and as `@result:<name>` for chat component props; keepOnly returns only its path and shape.",
+  description: "Run one enabled tool on a user-added MCP server, or any Workbench tool at its current schema on server wb. Find tools and their input schemas with mcp_tools first. keep saves the result as a JSON file and as `@result:<name>` for chat component props; keepOnly returns only its path and shape.",
   effects: { readOnly: false, openWorld: true },
   helpGroups: ["mcp"],
   mcpCodeModeEligible: true,

@@ -14,7 +14,7 @@
  * - isWorkbenchFileRemoval/getWorkbenchFileRemovalChanges: present wb rm calls as file-change deletes.
  */
 import type { JsonValue, ThreadItem } from "workbench-shared/workbench/thread/workbench-thread-items";
-import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
+import { readWorkbenchDeferredCall } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import type { NativeFileChange } from "./native-file-changes";
 import {
   getWorkbenchShellAggregatedOutput,
@@ -231,14 +231,6 @@ export function getWorkbenchFileRemovalChanges(item: ThreadItem): NativeFileChan
   }));
 }
 
-/** `mcp_call` on server `wb` runs a deferred Workbench tool; it presents as that tool. */
-function readDeferredCall(tool: string, argumentsValue: JsonValue) {
-  if (tool !== "mcp_call" || argumentsValue === null || typeof argumentsValue !== "object" || Array.isArray(argumentsValue)) return null;
-  const { arguments: inner, server, tool: target } = argumentsValue;
-  if (server !== WORKBENCH_MCP_SERVER_NAME || typeof target !== "string" || target === "mcp_call") return null;
-  return { arguments: inner ?? {}, tool: target };
-}
-
 /** An active skill's presentation of an external call, as an ordinary summary route its draw mode then places. */
 function getSkillMcpCommandRoute({ argumentsValue, context, item, server, tool }: WorkbenchMcpCommandInput): WorkbenchCommandRoute | null {
   const runtime = context?.skillMcpMatchers;
@@ -258,9 +250,10 @@ export function getWorkbenchMcpCommandRoute(input: WorkbenchMcpCommandInput): Wo
   const skill = getSkillMcpCommandRoute(input);
   if (skill) return skill;
   if (!isWorkbenchMcpServer(server)) return null;
-  const deferred = readDeferredCall(tool, argumentsValue);
+  // `mcp_call` on server `wb` presents as the tool it ran.
+  const deferred = readWorkbenchDeferredCall(tool, argumentsValue);
   if (deferred) {
-    const route = getWorkbenchMcpCommandRoute({ argumentsValue: deferred.arguments, context, server, tool: deferred.tool });
+    const route = getWorkbenchMcpCommandRoute({ argumentsValue: deferred.arguments as JsonValue, context, server, tool: deferred.tool });
     if (route) return route;
   }
   if (!isWorkbenchCommandPresentationName(tool)) {

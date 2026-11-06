@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - McpServerNameSchema: agent-facing server name used by `mcp_tools` and `mcp_call`.
- * - WORKBENCH_MCP_SERVER_NAME: reserved server name under which `mcp_tools`/`mcp_call` reach Workbench's own deferred tools.
+ * - WORKBENCH_MCP_SERVER_NAME: reserved server name under which `mcp_tools`/`mcp_call` reach Workbench's own tools at their current schemas.
+ * - readWorkbenchDeferredCall: the Workbench tool and arguments one recorded `mcp_call` ran.
  * - McpServerUrlSchema: http(s) endpoint of one streamable-HTTP MCP server.
  * - McpPackageNameSchema/McpPackageVersionSchema/McpPackageArgsSchema: npm package, version or range, and command-line arguments of a Workbench-installed stdio server.
  * - McpServerCommandSchema: the program a cli server runs.
@@ -24,6 +25,17 @@ export const McpServerNameSchema = z.string().trim().regex(/^[a-z0-9][a-z0-9._-]
 
 /** User-added servers never take this name; Workbench serves its deferred tools there. */
 export const WORKBENCH_MCP_SERVER_NAME = "wb";
+
+/**
+ * The Workbench tool an `mcp_call` runs, or null for any other call. Readers that act on a tool's name use this, so a call
+ * counts the same whichever door it came through.
+ */
+export function readWorkbenchDeferredCall(tool: string, args: unknown) {
+  if (tool !== "mcp_call" || args === null || typeof args !== "object" || Array.isArray(args)) return null;
+  const { arguments: inner, server, tool: target } = args as Record<string, unknown>;
+  if (server !== WORKBENCH_MCP_SERVER_NAME || typeof target !== "string" || target === "mcp_call") return null;
+  return { arguments: inner ?? {}, tool: target };
+}
 
 export const McpServerUrlSchema = z.string().trim().max(2048).refine(value => {
   try {

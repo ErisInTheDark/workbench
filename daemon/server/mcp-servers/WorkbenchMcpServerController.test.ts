@@ -570,6 +570,30 @@ test("a kept call saves its data for the calling thread, and keepOnly withholds 
   } finally { close(); }
 });
 
+test("a Workbench tool's result keeps under the same rules, and an error is never kept", async () => {
+  const { create, close } = setup({});
+  try {
+    const kept: { threadId: string; name: string; value: unknown }[] = [];
+    const owner = create({
+      downloads: {
+        download: async () => { throw new Error("unexpected download"); },
+        keep: async (threadId, name, value) => { kept.push({ threadId, name, value }); return { name, path: `/cache/${name}.json`, bytes: 42 }; },
+      },
+    });
+    const result = { content: [{ type: "text" as const, text: JSON.stringify({ secret: "card" }) }, { type: "text" as const, text: "a note" }], structuredContent: { secret: "card" } };
+    const full = await owner.keepWorkbenchToolResult("thread", { keep: "doing" }, result);
+    assert.match(JSON.stringify(full.content), /secret/u);
+    assert.match(JSON.stringify(full.content), /Kept as `@result:doing`/u);
+    const only = await owner.keepWorkbenchToolResult("thread", { keep: "doing", keepOnly: true }, result);
+    assert.doesNotMatch(JSON.stringify(only), /card/u, "neither text nor structured content leaks");
+    assert.match(JSON.stringify(only.content), /a note/u);
+    assert.deepEqual(kept.map(({ threadId, value }) => [threadId, value]), [["thread", { secret: "card" }], ["thread", { secret: "card" }]]);
+    const failed = await owner.keepWorkbenchToolResult("thread", { keep: "doing" }, { isError: true, content: [{ type: "text", text: "boom" }] });
+    assert.match(JSON.stringify(failed.content), /not kept/u);
+    assert.equal(kept.length, 2);
+  } finally { close(); }
+});
+
 test("a renamed server keeps its allow rules under its new name and refuses a taken or reserved name", async () => {
   const drive = new FakeServer("drive");
   drive.tools = [tool("SEARCH")];

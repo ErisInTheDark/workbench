@@ -42,6 +42,23 @@ test("a listed document leaves Git's view until every thread listing it drops it
   assert.match(await status(), /notes\.md/u);
 });
 
+test("a linked worktree sharing the exclude file never drops the main checkout's block", async (context) => {
+  const { repository, root, status, store, write } = await fixture(context);
+  const linkedRoot = `${root}-linked`;
+  await repository.run(["worktree", "add", "--quiet", "--detach", linkedRoot]);
+  context.after(async () => await fs.rm(linkedRoot, { recursive: true, force: true }));
+  const linked = new GitProcessDocumentStore(await WorkbenchGitRepository.open(linkedRoot));
+  await write("notes.md", "notes\n");
+  await store.admit(thread, ["notes.md"]);
+  await linked.admit(thread, []);
+  assert.doesNotMatch(await status(), /notes\.md/u);
+  await linked.backup(thread, ["other.md"]);
+  await linked.admit(thread, []);
+  assert.doesNotMatch(await status(), /notes\.md/u);
+  await store.admit(thread, []);
+  assert.match(await status(), /notes\.md/u);
+});
+
 test("tracked and claimed paths refuse, hiding nothing", async (context) => {
   const { root, status, store, write } = await fixture(context);
   await assert.rejects(store.admit(thread, ["one.txt"]), /Tracked files/u);

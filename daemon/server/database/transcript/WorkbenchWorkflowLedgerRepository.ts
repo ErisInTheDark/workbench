@@ -5,6 +5,7 @@
  *   latest mode entry.
  */
 import type Database from "better-sqlite3";
+import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
 import { WORKBENCH_TURN_END_MARKER } from "workbench-shared/workbench/thread/thread-recovery-message";
 import {
   currentWorkflowMode, readWorkflowLedgerEntries, THREAD_STATE_TOOL, type WorkflowLedgerEntry,
@@ -20,6 +21,8 @@ const LEGACY_MODE_TOOL = "mode_set";
  */
 const LEDGER_TOOLS = [THREAD_STATE_TOOL, "proof_of_work", LEGACY_MODE_TOOL, "message_agent", "thread_recall"];
 const MODE_TOOLS = [THREAD_STATE_TOOL, LEGACY_MODE_TOOL];
+/** A live thread reaches tools newer than its prefix through `mcp_call`; those calls are recorded under `mcp_call`, so name them here. */
+const DEFERRED_CALL = `(c.tool_name = 'mcp_call' AND json_extract(c.arguments_json, '$.server') = '${WORKBENCH_MCP_SERVER_NAME}')`;
 
 type CallRow = { kind: "call"; tool_name: string; arguments_json: string; failed: number };
 type LedgerRow =
@@ -39,7 +42,8 @@ export default class WorkbenchWorkflowLedgerRepository {
         FROM thread_items i
         JOIN thread_turns tr ON tr.id = i.turn_id
         JOIN thread_operation_callable_tool_sources c ON c.item_id = i.id
-        WHERE i.thread_id = ? AND c.callable_kind = 'mcp' AND c.server_name IN (${servers}) AND c.tool_name IN (${tools})
+        WHERE i.thread_id = ? AND c.callable_kind = 'mcp' AND c.server_name IN (${servers})
+          AND (c.tool_name IN (${tools}) OR ${DEFERRED_CALL} AND json_extract(c.arguments_json, '$.tool') IN (${tools}))
           AND c.state IN ('completed', 'failed')
         UNION ALL
         SELECT 'message', NULL, NULL, NULL, tr.turn_index, i.item_position
@@ -57,7 +61,7 @@ export default class WorkbenchWorkflowLedgerRepository {
       ORDER BY turn_index DESC, item_position DESC
       LIMIT ?
     `).all(
-      threadId, ...WORKBENCH_TOOL_SERVERS, ...LEDGER_TOOLS, threadId, WORKBENCH_TURN_END_MARKER, threadId, LEDGER_ROW_LIMIT,
+      threadId, ...WORKBENCH_TOOL_SERVERS, ...LEDGER_TOOLS, ...LEDGER_TOOLS, threadId, WORKBENCH_TURN_END_MARKER, threadId, LEDGER_ROW_LIMIT,
     ) as LedgerRow[];
     const entries = rows.reverse().flatMap((row): WorkflowLedgerEntry[] => row.kind === "call"
       ? this.#entries(threadId, row)
@@ -78,11 +82,15 @@ export default class WorkbenchWorkflowLedgerRepository {
       FROM thread_items i
       JOIN thread_turns tr ON tr.id = i.turn_id
       JOIN thread_operation_callable_tool_sources c ON c.item_id = i.id
-      WHERE i.thread_id = ? AND c.callable_kind = 'mcp' AND c.server_name IN (${servers}) AND c.tool_name IN (${tools})
-        AND c.state = 'completed' AND c.error_text IS NULL AND json_extract(c.arguments_json, '$.mode') IS NOT NULL
+      WHERE i.thread_id = ? AND c.callable_kind = 'mcp' AND c.server_name IN (${servers})
+        AND c.state = 'completed' AND c.error_text IS NULL AND (
+          (c.tool_name IN (${tools}) AND json_extract(c.arguments_json, '$.mode') IS NOT NULL)
+          OR (${DEFERRED_CALL} AND json_extract(c.arguments_json, '$.tool') IN (${tools})
+            AND json_extract(c.arguments_json, '$.arguments.mode') IS NOT NULL)
+        )
       ORDER BY tr.turn_index DESC, i.item_position DESC
       LIMIT 1
-    `).get(threadId, ...WORKBENCH_TOOL_SERVERS, ...MODE_TOOLS) as CallRow | undefined;
+    `).get(threadId, ...WORKBENCH_TOOL_SERVERS, ...MODE_TOOLS, ...MODE_TOOLS) as CallRow | undefined;
     return row ? this.#entries(threadId, row).filter(entry => entry.kind === "mode") : [];
   }
 }

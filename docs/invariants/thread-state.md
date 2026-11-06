@@ -19,6 +19,7 @@
 - A thread has one live turn: admitting a turn settles earlier unsettled turns, and their undelivered agent-message steers resend into the new turn.
 - Agent messages never compact a sidebar thread or start a turn over its held questionnaire: when compaction is due or a questionnaire's turn is not live they are held pending and the send succeeds; a completed thread needs attention; the holds steer its next running turn.
 - Before a thread first enters a declared mode, only thread_state, recall and messaging tools run. After a completed compaction, edits and entering checklist-gated modes wait until an unfiltered own-thread recall and the compaction checklist follow it.
+- Workflow state reads a Workbench tool the same whether called directly or through `mcp_call` on server `wb`.
 - A thread's workflow selection is recorded at creation; messages without `workflowIds` keep it. Cross-folder subagents start on the default workflow.
 - Promotion is one-way and owned by the child's daemon: an unsettled subagent becomes a top-level thread, its parent relationship ends, and a former remote parent stays in its network history.
 - Until promoted, cross-folder and cross-daemon subagents keep subagent semantics; the child's daemon owns its lifecycle and lists it as its own sidebar row, the parent's daemon owns the relationship, a parent's unsettled remote children hold its task status like local ones, and handover never crosses folders. A child's sibling roster is the parent's latest pushed snapshot; stale rosters reject, never admit.

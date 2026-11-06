@@ -18,6 +18,7 @@ import WorkbenchServerSettings from "../lib/workbench/settings/WorkbenchServerSe
 
 const REQUIRED_REGISTRATIONS = [
   "agentCommand",
+  "mcpServers",
   "threadWorkflow",
   "approvals",
   "toolRevision",
@@ -80,6 +81,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       isWorkbenchRootCaller: caller => isSamePath(caller.cwd, context.legacyMigrationProjectRoot),
       readLocalCapabilities: () => settings.readLocalCapabilities(),
       readModeToolDenial: async (threadId, toolName, input) => await build.get("threadWorkflow").readToolDenial(threadId, toolName, input),
+      keepToolResult: async (threadId, input, result) => await build.get("mcpServers").keepWorkbenchToolResult(threadId, input, result),
       getReloadScopeCatalog: context.getReloadScopeCatalog,
       virtualReposAvailable: () => repo.isAvailable(),
       daemonOrigin: context.localDaemonOrigin,

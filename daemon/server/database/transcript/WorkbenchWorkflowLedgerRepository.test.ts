@@ -143,6 +143,53 @@ test("a mode entered before the ledger window still governs the thread, without 
   } finally { database.close(); }
 });
 
+test("workflow calls run through mcp_call on server wb count in the ledger; other servers and unrelated tools do not", () => {
+  const database = new Database(":memory:");
+  const wrapped = (id: string, tool: string, args: object, options: { failed?: boolean; server?: string; target?: string } = {}) =>
+    call(id, "mcp_call", { server: options.target ?? "wb", tool, arguments: args }, options);
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    seedThread(database, "thread");
+    settleTurn(database, "thread", 0, [
+      wrapped("brief", "thread_state", { mode: "Brief", processDocuments: ["notes.md"], proofs: { "plan.result": "done" } }),
+      wrapped("refused", "thread_state", { mode: "Implement", proofs: { "plan.verify": "ok" } }, { failed: true }),
+      wrapped("recall", "thread_recall", {}),
+      wrapped("parent", "message_agent", { parent: true, message: "plan", userVisibleSimpleVersion: "plan" }),
+      wrapped("user-server", "thread_state", { mode: "Review" }, { target: "docs" }),
+      wrapped("unrelated", "rg", { args: ["x"] }),
+    ]);
+
+    assert.deepEqual(new WorkbenchWorkflowLedgerRepository(database).read("thread"), [
+      { kind: "proof", proof: { proofs: { "plan.result": "done" } } },
+      { kind: "processDocuments", paths: ["notes.md"] },
+      { kind: "mode", mode: "Brief" },
+      { kind: "proof", proof: { proofs: { "plan.verify": "ok" } } },
+      { kind: "recall" },
+      { kind: "message", audience: "parent" },
+    ]);
+  } finally { database.close(); }
+});
+
+test("a mode entered through mcp_call before the ledger window still governs the thread", () => {
+  const database = new Database(":memory:");
+  try {
+    database.pragma("foreign_keys = ON");
+    installWorkbenchDatabaseSchema(database);
+    seedThread(database, "thread");
+    settleTurn(database, "thread", 0, [
+      call("old", "thread_state", { mode: "Inspect" }),
+      call("implement", "mcp_call", { server: "wb", tool: "thread_state", arguments: { mode: "Implement" } }),
+      call("user-server", "mcp_call", { server: "docs", tool: "thread_state", arguments: { mode: "Review" } }),
+    ]);
+    settleTurn(database, "thread", 1, Array.from({ length: 1000 }, (_, index): FixtureItem => ({
+      type: "agentMessage", id: `m${index}`, text: "Working.", phase: "commentary", memoryCitation: null, delivery: null, questions: null,
+    })));
+
+    assert.deepEqual(new WorkbenchWorkflowLedgerRepository(database).read("thread")[0], { kind: "mode", mode: "Implement" });
+  } finally { database.close(); }
+});
+
 test("messages to the parent join the ledger in order; sibling and failed messages do not", () => {
   const database = new Database(":memory:");
   try {
