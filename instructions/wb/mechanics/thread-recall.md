@@ -47,5 +47,6 @@ guard summary-driven replies.
 Before editing or entering a checklist-gated mode after compaction, apply this **Gotcha Checklist**:
 <proof-of-work id="compaction">
 - [ ] **Recovered narrative [compaction.narrative]:** Name the newest user request, last approved plan, its proof of work, later addenda and where your recall walk stopped.
+- [ ] **Process documents [compaction.process_documents]:** Reread every process document: those <tool id="thread_state" /> lists, and any recall or your assignment names. List each path you reread, or state this thread has none.
 </proof-of-work>
 </docs>

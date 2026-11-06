@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests pinned instruction layers over current files, and mode denials: claimed edits vs gitignored ones,
- * always-editable exemptions, tool and arc worktree denials, the pre-mode and compaction locks, the first declared mode standing in
+ * process document exemptions, tool and arc worktree denials, the pre-mode and compaction locks, the first declared mode standing in
  * for an undeclared one, and that thread_state is never denied.
  */
 import assert from "node:assert/strict";
@@ -88,8 +88,8 @@ const claimed = path.join(root, "src/a.ts");
 const ignored = path.join(root, ".workbench/notes.md");
 const notes = path.join(root, "docs/plan.md");
 
-test("edit:claims denies claimed Git-visible edits but not gitignored or always-editable ones", async () => {
-  const workflow = reader([{ kind: "editable", paths: ["docs/plan.md"] }, { kind: "mode", mode: "Review" }]);
+test("edit:claims denies claimed Git-visible edits but not gitignored ones or process documents", async () => {
+  const workflow = reader([{ kind: "processDocuments", paths: ["docs/plan.md"] }, { kind: "mode", mode: "Review" }]);
   const denial = await workflow.readEditDenial("t", [claimed, ignored, notes], [claimed, notes]);
   assert.equal([claimed, ignored, notes].map(candidate => denial?.includes(candidate)).join(), "true,false,false");
   assert.equal(await workflow.readEditDenial("t", [ignored, notes], [notes]), null);
@@ -105,7 +105,7 @@ test("before a first mode only state, recall and messaging tools run and nothing
     assert.equal(await fresh.readToolDenial("t", tool), null, tool);
   }
   for (const tool of ["shell", "rg", "read", "skill"]) assert.notEqual(await fresh.readToolDenial("t", tool), null, tool);
-  assert.notEqual(await fresh.readEditDenial("t", [notes], []), null, "always-editable or unclaimed, nothing is edited");
+  assert.notEqual(await fresh.readEditDenial("t", [notes], []), null, "process document or unclaimed, nothing is edited");
   assert.equal(await reader([], []).readEditDenial("t", [claimed], [claimed]), null);
   assert.equal(await reader([], []).readToolDenial("t", "shell"), null);
 });
@@ -118,10 +118,11 @@ test("an unrecovered compaction denies every edit and worktree tool until a reca
   const open: WorkflowMode = { ...review, name: "Open", deny: [] };
   const checklist = { id: "compaction", hidden: false, items: [{ id: "compaction.narrative", label: "Narrative" }] };
   const compacted = (...after: WorkflowLedgerEntry[]) => reader(
-    [{ kind: "editable", paths: ["docs/plan.md"] }, { kind: "mode", mode: "Open" }, { kind: "compaction" }, ...after], [open], [checklist],
+    [{ kind: "processDocuments", paths: ["docs/plan.md"] }, { kind: "mode", mode: "Open" }, { kind: "compaction" }, ...after], [open], [checklist],
   );
-  assert.notEqual(await compacted().readEditDenial("t", [notes], []), null, "always-editable paths are locked too");
+  assert.notEqual(await compacted().readEditDenial("t", [notes], []), null, "process documents are locked too");
   assert.notEqual(await compacted({ kind: "recall" }).readToolDenial("t", "git_arc_restore"), null, "the checklist is still owed");
+  assert.notEqual(await compacted({ kind: "recall" }).readToolDenial("t", "git_arc_restore", { ref: "process-documents" }), null, "so is a backup restore");
   assert.equal(await compacted().readToolDenial("t", "shell"), null, "inspection stays open");
   const recovered = compacted({ kind: "recall" }, { kind: "proof", proof: { proofs: { "compaction.narrative": "request, plan" } } });
   assert.equal(await recovered.readEditDenial("t", [claimed], [claimed]), null);
@@ -134,6 +135,10 @@ test("a mode denies its listed tools and, with edit denials, arc tools that writ
   for (const tool of ["git_arc_restore", "git_arc_stash", "git_arc_unstash", "git_arc_edit_apply"]) {
     assert.notEqual(await workflow.readToolDenial("t", tool), null, tool);
   }
+  assert.equal(await workflow.readToolDenial("t", "git_arc_restore", { ref: "process-documents" }), null, "backups restore in any mode");
+  assert.equal(await workflow.readToolDenial("t", "git_arc_restore", { ref: "process-documents~2" }), null);
+  assert.notEqual(await workflow.readToolDenial("t", "git_arc_restore", { ref: "abcdef1" }), null, "arc refs stay denied");
+  assert.notEqual(await workflow.readToolDenial("t", "git_arc_stash", { ref: "process-documents" }), null, "only restore reads the ref");
   assert.equal(await workflow.readToolDenial("t", "git_arc_adopt"), null);
   assert.equal(await workflow.readToolDenial("t", "rg"), null);
   assert.equal(await workflow.readToolDenial("t", "thread_state"), null);

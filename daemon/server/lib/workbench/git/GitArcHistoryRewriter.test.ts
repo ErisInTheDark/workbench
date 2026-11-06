@@ -1,13 +1,15 @@
 /*
- * Exports: none. Tests protect frozen stash merge bases during history remapping.
+ * Exports: none. Tests protect frozen stash merge bases and process document backups during history remapping.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { processDocumentsRef } from "workbench-shared/workbench/git/git-arc-storage";
 
 import GitArcHistoryRewriter, { remapGitArcClaimLossHead } from "./GitArcHistoryRewriter";
 import GitArcRegistry, { REGISTRY_REF } from "./GitArcRegistry";
+import GitProcessDocumentStore from "./GitProcessDocumentStore";
 import GitTestFixtureCache from "./GitTestFixtureCache";
 import { CONTROLLER_BASE_FIXTURE } from "./GitArcControllerTestFixtures";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
@@ -20,6 +22,32 @@ test("history remapping preserves frozen stash bases and advances ordinary loss 
   assert.equal(remapGitArcClaimLossHead({ frozen: true, head: oldHead }, commits), oldHead);
   assert.equal(remapGitArcClaimLossHead({ frozen: false, head: oldHead }, commits), newHead);
   assert.equal(remapGitArcClaimLossHead({ frozen: true, head: null }, commits), null);
+});
+
+test("history replacement leaves process document backups alone, and reports one whose object went missing", async context => {
+  const fixture = await new GitTestFixtureCache().copyFresh(CONTROLLER_BASE_FIXTURE);
+  context.after(fixture.dispose);
+  const repository = await WorkbenchGitRepository.open(fixture.root);
+  const store = new GitProcessDocumentStore(repository);
+  const identity = { harness: "codex" as const, threadId: "thread" };
+  await fs.writeFile(path.join(fixture.root, "notes.md"), "notes\n");
+  await store.admit(identity, ["notes.md"]);
+  const backup = await store.backup(identity, ["notes.md"]);
+  assert.ok(backup);
+  const previous = await repository.currentHead();
+  assert.ok(previous);
+  const next = await repository.createCommitFromTree(await repository.resolveTree(previous), previous, "replacement");
+  const ref = processDocumentsRef("codex", "thread");
+  const rewrite = await new GitArcHistoryRewriter(repository).prepare(new Map([[previous, next]]));
+  assert.equal(rewrite.updates.some(update => update.ref === ref), false);
+  assert.equal(rewrite.deletes.some(entry => entry.ref === ref), false);
+
+  const missing = "0123456789abcdef0123456789abcdef01234567";
+  const refs = repository.listRefsWithValues.bind(repository);
+  repository.listRefsWithValues = async (...namespaces) => (await refs(...namespaces))
+    .map(entry => entry.ref === ref ? { ...entry, objectType: "missing" as const, value: missing } : entry);
+  const damaged = await new GitArcHistoryRewriter(repository).prepare(new Map([[previous, next]]));
+  assert.ok(damaged.warnings.some(warning => warning.includes(ref)));
 });
 
 test("history replacement remaps the caller checkpoint but keeps adopted frozen work intact", async context => {

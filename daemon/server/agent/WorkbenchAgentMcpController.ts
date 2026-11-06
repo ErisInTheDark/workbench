@@ -119,7 +119,7 @@ function waitTimeoutText(toolName: string) {
 export interface WorkbenchAgentMcpControllerOptions {
   isSubagentCaller?: (caller: WorkbenchProviderCaller) => Promise<boolean>;
   /** Why the caller's current workflow mode denies a tool, or null. */
-  readModeToolDenial?: (threadId: string, toolName: string) => Promise<string | null>;
+  readModeToolDenial?: (threadId: string, toolName: string, input?: unknown) => Promise<string | null>;
   /** Live local capability settings; capability-gated deferred tools are found and run only while enabled. */
   readLocalCapabilities?: () => Promise<WorkbenchLocalCapabilitySettings>;
   /** Whether the caller works at the Workbench repository root, the only audience of root-only commands. */
@@ -1015,7 +1015,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         { harness: caller.harness, workbenchRoot },
         { isSubagent: async () => await this.isSubagentCaller(caller), readCapabilities: this.readLocalCapabilities },
       );
-      const denial = refusal ? describeWorkbenchCommandRefusal(refusal, toolName, caller.harness) : await this.readModeToolDenial(caller.threadId, toolName);
+      const denial = refusal ? describeWorkbenchCommandRefusal(refusal, toolName, caller.harness) : await this.readModeToolDenial(caller.threadId, toolName, input);
       if (denial) return { kind: "result", unregister, result: { isError: true, content: [{ type: "text" as const, text: denial }] } };
       const { input: commandInput, cwd } = await resolveWorkbenchMcpWorkdir(definition, input, caller.cwd);
       if (signal.aborted) throw signal.reason;

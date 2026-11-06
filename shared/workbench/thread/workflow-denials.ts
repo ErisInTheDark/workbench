@@ -14,7 +14,7 @@ export function describeModeToolDenial(mode: string, toolName: string) {
 }
 
 export function describeModeEditDenial(mode: string, what: "file edits" | "edits to Git-visible files", paths: readonly string[]) {
-  return `${mode} mode denies ${what}: ${paths.join(", ")}. Switch modes with ${THREAD_STATE_TOOL}, or list committed process notes in alwaysEditable.`;
+  return `${mode} mode denies ${what}: ${paths.join(", ")}. Switch modes with ${THREAD_STATE_TOOL}, or list process documents in processDocuments.`;
 }
 
 export function describeCompactionEditDenial(recovery: CompactionRecovery) {

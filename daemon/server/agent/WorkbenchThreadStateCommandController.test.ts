@@ -1,6 +1,6 @@
 /*
  * No production exports. Tests thread_state ordering: a refused, undeclared, unpaired, unannounced or unrecovered mode or status applies nothing else, a refused title
- * stops the status, and an accepted call retitles before setting status.
+ * stops the status, an accepted call retitles before setting status, and process documents are admitted first and backed up on a mode switch.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -14,13 +14,24 @@ const reviewMode: WorkflowMode = {
 };
 const implementMode: WorkflowMode = { name: "Implement", icon: "pen", color: null, proofs: [], resetOn: [], from: [], after: "message", status: null, deny: [] };
 
-function fixture(ledger: WorkflowLedgerEntry[] = [], { titleFails = false } = {}) {
+function fixture(ledger: WorkflowLedgerEntry[] = [], {
+  titleFails = false, listed = [] as readonly string[], admitFails = false, backupFails = false, backedUp = true,
+} = {}) {
   const applied: string[] = [];
   const controller = new WorkbenchThreadStateCommandController({
     resolveCaller: async ({ threadId }) => ({ threadId }),
     readWorkflow: async () => ({
-      overlays: { checklists: [review], modes: [reviewMode, implementMode] }, ledger, mode: "Implement", definition: null, alwaysEditable: [], projectRoot: null,
+      overlays: { checklists: [review], modes: [reviewMode, implementMode] }, ledger, mode: "Implement", definition: null, processDocuments: listed, projectRoot: null,
     }),
+    admitProcessDocuments: async (_caller, paths) => {
+      if (admitFails) throw new Error("Tracked files cannot be process documents.");
+      applied.push(`admit:${paths.join()}`);
+    },
+    backupProcessDocuments: async (_caller, paths) => {
+      if (backupFails) throw new Error("disk full");
+      applied.push(`backup:${paths.join()}`);
+      return backedUp ? ["commit"] : [];
+    },
     readTurnItems: async () => [],
     readTitle: async () => "Title",
     setTitle: async (_caller, title) => {
@@ -91,6 +102,46 @@ test("a mode entered only after a message refuses a silent hop, applying nothing
   assert.match(result.body, /since you entered Review/u);
   assert.deepEqual(silent.applied, []);
   assert.equal((await fixture([{ kind: "mode", mode: "Review" }, { kind: "message", audience: "user" }]).call({ mode: "Implement" })).status, 200);
+});
+
+const announced: WorkflowLedgerEntry[] = [{ kind: "mode", mode: "Review" }, { kind: "message", audience: "user" }];
+
+test("a refused process document applies nothing else, and a refused mode never touches the list", async () => {
+  const refused = fixture(announced, { admitFails: true });
+  const result = await refused.call({ processDocuments: ["tracked.md"], mode: "Implement", title: "New", status: "blocked" });
+  assert.equal(result.status, 400);
+  assert.match(result.body, /Tracked files/u);
+  assert.deepEqual(refused.applied, []);
+  const gated = fixture();
+  assert.equal((await gated.call({ processDocuments: ["notes.md"], mode: "Fixing" })).status, 400);
+  assert.deepEqual(gated.applied, []);
+});
+
+test("a mode switch backs up the list this call leaves in place; other calls never back up", async () => {
+  const replaced = fixture(announced, { listed: ["old.md"] });
+  const result = await replaced.call({ processDocuments: ["new.md"], mode: "Implement" });
+  assert.equal(result.status, 200);
+  assert.deepEqual(replaced.applied, ["admit:new.md", "backup:new.md"]);
+  assert.match(result.body, /Process documents: new\.md\./u);
+  assert.match(result.body, /backed up/u);
+  const kept = fixture(announced, { listed: ["old.md"] });
+  await kept.call({ mode: "Implement" });
+  assert.deepEqual(kept.applied, ["backup:old.md"]);
+  const titled = fixture(announced, { listed: ["old.md"] });
+  await titled.call({ title: "New" });
+  assert.deepEqual(titled.applied, ["title:New"]);
+  const empty = fixture(announced);
+  await empty.call({ mode: "Implement" });
+  assert.deepEqual(empty.applied, []);
+});
+
+test("an unchanged backup stays quiet and a failed one is reported without holding up the mode", async () => {
+  const unchanged = await fixture(announced, { listed: ["notes.md"], backedUp: false }).call({ mode: "Implement" });
+  assert.doesNotMatch(unchanged.body, /backed up|backup/u);
+  const failed = await fixture(announced, { listed: ["notes.md"], backupFails: true }).call({ mode: "Implement" });
+  assert.equal(failed.status, 200);
+  assert.match(failed.body, /Entered Implement/u);
+  assert.match(failed.body, /backup failed: disk full/u);
 });
 
 test("invalid proofs are rejected before anything runs", async () => {

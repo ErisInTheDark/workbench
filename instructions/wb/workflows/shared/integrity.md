@@ -50,7 +50,7 @@ If you are in Brief mode and discover you need more facts, switch back to Inspec
 
 ### Plan Document Iteration
 
-When the approver asks to draft, crystallize, revise, summarize, or iterate on a markdown plan document, treat that file as a shared planning output channel during Inspect and Brief mode. List it in <tool id="thread_state" /> `alwaysEditable` so modes that deny edits allow it; use that list only for committed process or plan notes, never to dodge a mode.
+When the approver asks to draft, crystallize, revise, summarize, or iterate on a markdown plan document, treat that file as a shared planning output channel during Inspect and Brief mode. It is a process document; list it.
 
 Plan-document edits are not implementation when they only record current understanding, options, open questions, proposed steps, or decision summaries. Brief mode may summarize what changed in the plan document and what still needs approval.
 

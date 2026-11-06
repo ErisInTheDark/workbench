@@ -12,6 +12,7 @@
  * - checkpointNamespace/legacyCheckpointNamespace: checkpoint ref namespaces.
  * - proposalNamespace/legacyProposalNamespace: proposal ref namespaces.
  * - outcomeRef: checkpoint-qualified outcome ref.
+ * - processDocumentsRef/parseProcessDocumentRevision: a thread's process document backup ref, and the restore refs that name its backups.
  * - checkpointMessage/proposalMessage: serialise marked metadata.
  * - parseMarkedMetadata: decode marked metadata messages.
  * - remapCheckpointMetadata/remapProposalMetadata/remapArcOutcome: rewrite stored commit identities.
@@ -158,6 +159,16 @@ export function legacyProposalNamespace(threadId: string) {
 
 export function outcomeRef(harness: GitArcHarness, threadId: string, sourceCheckpoint: string) {
   return `refs/worktree/agents/${harness}/${normalizeThreadId(threadId)}/arc-outcomes/${normalizeCommit(sourceCheckpoint)}`;
+}
+
+export function processDocumentsRef(harness: GitArcHarness, threadId: string) {
+  return `refs/worktree/agents/${harness}/${normalizeThreadId(threadId)}/process-documents`;
+}
+
+/** How many backups before the latest a restore ref names: `process-documents` is 0, `process-documents~2` is 2; null for any other ref. */
+export function parseProcessDocumentRevision(ref: string) {
+  const match = /^process-documents(?:~(\d+))?$/u.exec(ref);
+  return match ? Number(match[1] ?? 0) : null;
 }
 
 export function checkpointMessage(metadata: CheckpointMetadata) {

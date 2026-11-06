@@ -367,7 +367,7 @@ const rescind = defineWorkbenchAgentCommand({
 });
 
 const restore = defineWorkbenchAgentCommand({
-  description: "Restore selected paths from an arc, or restore its full snapshot after explicit confirmation.",
+  description: "Restore selected paths from an arc, or restore its full snapshot after explicit confirmation. Ref `process-documents` or `process-documents~N` restores selected process documents from their backups in any mode.",
   effects: { destructive: true },
   helpGroups: ["git-arc"],
   words: ["git", "arc", "restore"],

@@ -19,21 +19,21 @@ export const WorkbenchThreadStateRequestSchema = z.object({
 const threadState = defineWorkbenchAgentCommand({
   words: ["thread", "state"],
   usage: "wb thread state [--proofs-json <json-object>] [--not-applicable <id>]... [--mode <name>] "
-    + "[--title <text> [--current-title <text>]] [--status completed|blocked] [--always-editable <path>]... [--clear-always-editable]",
+    + "[--title <text> [--current-title <text>]] [--status completed|blocked] [--process-document <path>]... [--clear-process-documents]",
   description: "Read this thread's state, or change it in one call: file Gotcha Checklist proofs (what each item found, "
-    + "or not-applicable ids), enter a mode, retitle, set status, and set the paths every mode may edit. "
+    + "or not-applicable ids), enter a mode, retitle, set status, and set its process documents. "
     + "Proofs always file; a refused mode or status applies nothing else. Every result reports the full state.",
   helpGroups: ["thread"],
   inputSchema: ThreadStateSchema,
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(args, {
       values: ["--proofs-json", "--mode", "--title", "--current-title", "--status"],
-      repeatable: ["--not-applicable", "--always-editable"],
-      boolean: ["--clear-always-editable"],
+      repeatable: ["--not-applicable", "--process-document"],
+      boolean: ["--clear-process-documents"],
     });
     const proofs = flags.optional("--proofs-json");
     const notApplicable = flags.repeated("--not-applicable");
-    const alwaysEditable = flags.repeated("--always-editable");
+    const processDocuments = flags.repeated("--process-document");
     return ThreadStateSchema.parse({
       ...(proofs === null ? {} : { proofs: JSON.parse(proofs) }),
       ...(notApplicable.length ? { notApplicable } : {}),
@@ -41,7 +41,7 @@ const threadState = defineWorkbenchAgentCommand({
       ...(flags.optional("--title") ? { title: flags.optional("--title") } : {}),
       ...(flags.optional("--current-title") ? { currentTitle: flags.optional("--current-title") } : {}),
       ...(flags.optional("--status") ? { status: flags.optional("--status") } : {}),
-      ...(alwaysEditable.length || flags.has("--clear-always-editable") ? { alwaysEditable } : {}),
+      ...(processDocuments.length || flags.has("--clear-process-documents") ? { processDocuments } : {}),
     });
   },
   buildRequest(input, context) {

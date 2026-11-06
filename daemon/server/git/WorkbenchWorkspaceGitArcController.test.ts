@@ -1,10 +1,10 @@
 /*
  * Exports:
- * - No production exports; tests protect workspace Git arc routing, projection, rollback, and machine root claims.
+ * - No production exports; tests protect workspace Git arc routing, projection, rollback, process documents, and machine root claims.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
 import path from "node:path";
 import { test } from "node:test";
@@ -22,6 +22,7 @@ import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import { applyGitClaimChanges, type GitArcClaimChanges } from "workbench-shared/workbench/git/git-arc-state";
 import { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import { GitArcStatusSchema } from "workbench-shared/workbench/git/git-arc-status";
+import { GitCheckpointRequestSchema } from "workbench-shared/workbench/git/checkpoint-contracts";
 import { GitArcScopeClaimsResponseSchema } from "workbench-shared/workbench/git/git-arc-scope-response";
 import * as fixtureIdentitySchemas from "workbench-shared/workbench/identity";
 import OpenCodeToolsController from "../providers/opencode/OpenCodeToolsController";
@@ -1709,6 +1710,54 @@ test("nested worktree files follow the worktree's own ignore rules, not the cont
   assert.deepEqual(withoutClaimedPaths(await controller.checkActiveClaimPaths(project, "codex", "thread-one", [...allowed, ...uncovered])), {
     allowed: false, pendingProposals: [], uncoveredPaths: uncovered,
   });
+});
+
+test("process documents hide, back up and restore in each document's own repository, through the real request schema", async context => {
+  const temporary = await WorkbenchTemporaryDirectory.create("workbench-process-documents-");
+  context.after(async () => await temporary.dispose());
+  const base = await realpath(temporary.path);
+  const [api, web, plain] = [path.join(base, "api"), path.join(base, "web"), path.join(base, "plain")];
+  await mkdir(plain);
+  for (const repository of [api, web]) {
+    await execFileAsync("git", ["init", "-q", repository], { windowsHide: true });
+    await execFileAsync("git", ["-C", repository, "config", "user.name", "fixture"], { windowsHide: true });
+    await execFileAsync("git", ["-C", repository, "config", "user.email", "fixture@example.com"], { windowsHide: true });
+  }
+  const project = createWorkspace(api, web);
+  const controller = new WorkbenchWorkspaceGitArcController(
+    new WorkbenchGitCheckpointControllerImpl(), new WorkbenchThreadTransitionCoordinator(), async rootPath => rootPath,
+  );
+  const status = async (repository: string) => (await execFileAsync("git", ["-C", repository, "status", "--porcelain", "--untracked-files=all"], { windowsHide: true })).stdout;
+  const [notes, plan] = [path.join(api, "notes.md"), path.join(web, "plan.md")];
+  const listed = ["notes.md", "web:plan.md"];
+  await writeFile(notes, "notes\n", "utf8");
+  await writeFile(plan, "plan\n", "utf8");
+
+  await controller.admitProcessDocuments(project, "codex", "thread", listed);
+  assert.equal(await status(api), "");
+  assert.equal(await status(web), "");
+  assert.equal((await controller.backupProcessDocuments(project, "codex", "thread", listed)).length, 2);
+  assert.deepEqual(await controller.backupProcessDocuments(project, "codex", "thread", listed), []);
+
+  await writeFile(notes, "mangled\n", "utf8");
+  await writeFile(plan, "mangled\n", "utf8");
+  await controller.execute(project, GitCheckpointRequestSchema.parse({
+    action: "restore", checkpointCommit: "process-documents", cwd: project.cwd, harness: "codex", paths: listed, threadId: "thread",
+  }));
+  assert.equal(await readFile(notes, "utf8"), "notes\n");
+  assert.equal(await readFile(plan, "utf8"), "plan\n");
+
+  await controller.admitProcessDocuments(project, "codex", "thread", ["notes.md"]);
+  assert.equal(await status(api), "");
+  assert.match(await status(web), /plan\.md/u, "dropping a document unhides it in its own repository");
+
+  const withoutRepository = new WorkbenchWorkspaceGitArcController(
+    new WorkbenchGitCheckpointControllerImpl(), new WorkbenchThreadTransitionCoordinator(), async rootPath => rootPath === plain ? null : rootPath,
+  );
+  const mixed = createWorkspace(api, plain);
+  await withoutRepository.admitProcessDocuments(mixed, "codex", "thread", ["notes.md", "web:loose.md"]);
+  assert.equal(await status(api), "", "a root without a repository only skips hiding");
+  assert.equal((await withoutRepository.backupProcessDocuments(mixed, "codex", "thread", ["web:loose.md"])).length, 0);
 });
 
 test("machine roots claim existing files by absolute path, admit scratch edits, and leave repositories their visible files", async context => {

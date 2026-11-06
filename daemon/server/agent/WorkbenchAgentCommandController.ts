@@ -52,7 +52,7 @@ interface WorkbenchAgentDirectPort {
   executeTodoRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeThreadStateRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   /** Why the caller's current workflow mode denies a tool, or null. */
-  readModeToolDenial?: (threadId: string, toolName: string) => Promise<string | null>;
+  readModeToolDenial?: (threadId: string, toolName: string, input?: unknown) => Promise<string | null>;
   executeMcpRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeVisRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   /** Hands piped project-command output to the vis run waiting on `runId`; false when no run waits. */

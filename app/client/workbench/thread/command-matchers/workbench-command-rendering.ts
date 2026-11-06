@@ -836,10 +836,10 @@ export function getWorkbenchCommandRoute(
       // Mode switches draw as mode lines and refused calls draw nothing; these are the rest.
       const status = args.status === "completed" || args.status === "blocked" ? args.status : null;
       if (status) return specialized("workbench-cli.task-status", { kind: "threadStatus", status }, `Marking task ${status}`);
-      // Always-editable grants waive mode edit denials, so they outrank every other row.
-      if (Array.isArray(args.alwaysEditable)) {
-        const paths = args.alwaysEditable.filter((entry): entry is string => typeof entry === "string");
-        const target = paths.length ? `always editable: ${paths.join(", ")}` : "always-editable paths";
+      // Process documents waive mode edit denials, so they outrank every other row.
+      if (Array.isArray(args.processDocuments)) {
+        const paths = args.processDocuments.filter((entry): entry is string => typeof entry === "string");
+        const target = paths.length ? `process documents: ${paths.join(", ")}` : "process documents";
         return paths.length
           ? simple("workbench-cli.thread-state", actionTarget("Setting ", target), actionTarget("Set ", target))
           : simple("workbench-cli.thread-state", actionTarget("Clearing ", target), actionTarget("Cleared ", target));

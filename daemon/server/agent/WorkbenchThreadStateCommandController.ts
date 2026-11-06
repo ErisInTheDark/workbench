@@ -1,8 +1,9 @@
 /*
  * Exports:
- * - WorkbenchThreadStateCommandPorts: caller, workflow, turn transcript, title and status ports.
+ * - WorkbenchThreadStateCommandPorts: caller, workflow, process document, turn transcript, title and status ports.
  * - default WorkbenchThreadStateCommandController: answer one thread_state call: file its proofs, refuse its mode or status
- *   without applying anything else, or retitle then set status; every answer reports the full state.
+ *   without applying anything else, or list process documents, retitle, set status and back documents up on a mode switch;
+ *   every answer reports the full state.
  */
 import {
   formatProofOfWorkReport, mergeProofs, ProofOfWorkSchema, proofFamily, reconcileProofOfWork,
@@ -16,10 +17,16 @@ import type { ThreadItem } from "workbench-shared/workbench/thread/workbench-thr
 import { WorkbenchThreadStateRequestSchema } from "../lib/workbench/commands/thread-state-command-definition";
 import type { WorkbenchThreadWorkflow } from "../thread/WorkbenchThreadWorkflowReader";
 
+interface WorkbenchThreadStateCaller { cwd: string; harness: string; threadId: string }
+
 export interface WorkbenchThreadStateCommandPorts {
-  resolveCaller(caller: { cwd: string; harness: string; threadId: string }, signal: AbortSignal): Promise<{ threadId: string }>;
+  resolveCaller(caller: WorkbenchThreadStateCaller, signal: AbortSignal): Promise<{ threadId: string }>;
   /** The thread's workflow before this call; its ledger never holds the call being answered. */
   readWorkflow(threadId: string): Promise<WorkbenchThreadWorkflow>;
+  /** Throws the owner's explanation when a path cannot stay out of commits; hides the rest and unhides what the list dropped. */
+  admitProcessDocuments(caller: WorkbenchThreadStateCaller, paths: readonly string[]): Promise<void>;
+  /** The backup commits written; empty when nothing changed. */
+  backupProcessDocuments(caller: WorkbenchThreadStateCaller, paths: readonly string[]): Promise<readonly string[]>;
   /** The latest turn's items in transcript order; it may already hold the call being answered. */
   readTurnItems(threadId: string, signal: AbortSignal): Promise<readonly ThreadItem[]>;
   readTitle(caller: { cwd: string; threadId: string }): Promise<string>;
@@ -39,6 +46,10 @@ const MESSAGE_FIRST = {
   user: "show the user your plan, or what approved work you are resuming, first",
   parent: "brief your parent, or tell it what approved work you are resuming, first",
 } as const;
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /** The message a mode's `after` precondition asks for; null when it has none. */
 function messageNeed(mode: WorkflowMode | null) {
@@ -92,13 +103,19 @@ export default class WorkbenchThreadStateCommandController {
         : [],
     ];
 
-    let titleFailure: string | null = null;
-    if (!refusals.length && state.title) {
-      try { await this.ports.setTitle(caller, state.title, state.currentTitle); }
-      catch (error) { titleFailure = error instanceof Error ? error.message : String(error); }
+    let failure: string | null = null;
+    if (!refusals.length && state.processDocuments) {
+      try { await this.ports.admitProcessDocuments(callerInput, state.processDocuments); }
+      catch (error) { failure = `Process documents: ${errorMessage(error)}`; }
     }
-    const applied = !refusals.length && !titleFailure;
+    if (!refusals.length && !failure && state.title) {
+      try { await this.ports.setTitle(caller, state.title, state.currentTitle); }
+      catch (error) { failure = `Title: ${errorMessage(error)}`; }
+    }
+    const applied = !refusals.length && !failure;
     if (applied && state.status) await this.ports.setStatus(caller, state.status);
+    const documents = applied && state.processDocuments ? state.processDocuments : workflow.processDocuments;
+    const backup = applied && state.mode ? await this.backup(callerInput, documents) : null;
 
     const entered = applied && state.mode ? state.mode : workflow.mode;
     const effective = applied && state.mode ? state.mode : effectiveWorkflowMode(workflow.ledger, modes)?.name ?? null;
@@ -106,18 +123,29 @@ export default class WorkbenchThreadStateCommandController {
     const shownMode = entered && effective && entered.toLowerCase() === effective.toLowerCase()
       ? entered
       : `${entered ?? "none"}${effective ? `, so ${effective}'s rules apply` : ""}`;
-    const editable = applied && state.alwaysEditable ? state.alwaysEditable : workflow.alwaysEditable;
     const [title, status] = await Promise.all([this.ports.readTitle(caller), this.ports.readStatus(threadId)]);
     const report = [
       applied
         ? (state.mode ? `Entered ${state.mode}.` : "Applied.")
-        : `Not applied${proof ? "; proofs filed" : ""}:\n${titleFailure ? `Title: ${titleFailure}` : refusals.join("\n")}`,
+        : `Not applied${proof ? "; proofs filed" : ""}:\n${failure ?? refusals.join("\n")}`,
       `Mode: ${shownMode}. Status: ${status}${applied && state.status ? ` (${state.status} applies when the turn ends)` : ""}. Title: ${title || "none"}.`,
-      `Always editable: ${editable.length ? editable.join(", ") : "none"}.`,
+      `Process documents: ${documents.length ? documents.join(", ") : "none"}.`,
+      ...backup ? [backup] : [],
       ...proof ? [this.proofReport(proof, items, ledger, workflow)] : [],
       ...this.owed(applied && state.mode ? [...ledger, { kind: "mode", mode: state.mode }] : ledger, workflow, mode),
     ];
     return text(report.join("\n"), applied ? 200 : 400);
+  }
+
+  /** Backups are a safety net: a failure is reported and never holds up the mode switch that already applied. */
+  private async backup(caller: WorkbenchThreadStateCaller, documents: readonly string[]) {
+    if (!documents.length) return null;
+    try {
+      const commits = await this.ports.backupProcessDocuments(caller, documents);
+      return commits.length ? "Process documents backed up." : null;
+    } catch (error) {
+      return `Process document backup failed: ${errorMessage(error)}`;
+    }
   }
 
   private issues(issues: readonly { message: string; path: readonly PropertyKey[] }[]) {

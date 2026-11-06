@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ProofOfWork, ProofOfWorkChecklist } from "./proof-of-work";
 import {
-  awaitsFirstMode, compactionRecoveryNeeds, currentAlwaysEditable, effectiveWorkflowMode, evaluateThreadStateTransition, gatedProofWindows,
+  awaitsFirstMode, compactionRecoveryNeeds, currentProcessDocuments, effectiveWorkflowMode, evaluateThreadStateTransition, gatedProofWindows,
   readFiledProofs, readModeEntered, readWorkflowLedgerEntries, type ThreadState, type WorkflowLedgerEntry, type WorkflowMode,
 } from "./workflow-modes";
 
@@ -155,15 +155,22 @@ test("gated families report over the same window their modes count", () => {
 });
 
 test("refused thread_state calls keep only their proofs; legacy calls count only on success", () => {
-  const args = { proofs: { "review.coverage": "ok" }, mode: "Review", status: "completed", alwaysEditable: ["notes.md"] };
+  const args = { proofs: { "review.coverage": "ok" }, mode: "Review", status: "completed", processDocuments: ["notes.md"] };
   assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "thread_state", args, failed: true }), [reviewed]);
   assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "thread_state", args, failed: false }), [
-    reviewed, { kind: "editable", paths: ["notes.md"] }, mode("Review"),
+    reviewed, { kind: "processDocuments", paths: ["notes.md"] }, mode("Review"),
   ]);
   assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "mode_set", args: { mode: "Brief" }, failed: false }), [mode("Brief")]);
   assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "mode_set", args: { mode: "Brief" }, failed: true }), []);
   assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "proof_of_work", args: { proofs: {} }, failed: false }), []);
-  assert.deepEqual(currentAlwaysEditable([{ kind: "editable", paths: ["a.md"] }, { kind: "editable", paths: [] }]), []);
+  assert.deepEqual(currentProcessDocuments([{ kind: "processDocuments", paths: ["a.md"] }, { kind: "processDocuments", paths: [] }]), []);
+});
+
+test("recorded calls that sent alwaysEditable keep their list, mode and proofs", () => {
+  const args = { proofs: { "review.coverage": "ok" }, mode: "Review", alwaysEditable: ["notes.md"] };
+  assert.deepEqual(readWorkflowLedgerEntries({ threadId: "thread", tool: "thread_state", args, failed: false }), [
+    reviewed, { kind: "processDocuments", paths: ["notes.md"] }, mode("Review"),
+  ]);
 });
 
 test("recorded calls that sent the retired defer bucket keep their mode and other proofs", () => {

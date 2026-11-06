@@ -1,18 +1,20 @@
 /*
  * Exports:
  * - WorkbenchThreadWorkflowPorts: where one thread's instruction selection, skills, pinned instructions and workflow ledger come from.
- * - WorkbenchThreadWorkflow: a thread's resolved overlays, ledger, current mode and always-editable paths.
+ * - WorkbenchThreadWorkflow: a thread's resolved overlays, ledger, current mode and process documents.
  * - default WorkbenchThreadWorkflowReader: own reading a thread's workflow state from the instructions it was given, and the edit and
  *   tool denials its lock state and current mode impose.
  */
 import path from "node:path";
+import { z } from "zod";
+import { parseProcessDocumentRevision } from "workbench-shared/workbench/git/git-arc-storage";
 import type { WorkbenchInstructionSelection } from "workbench-shared/workbench/provider/provider-input";
 import type { WorkbenchThreadSkill } from "workbench-shared/workbench/thread/thread-skill-state";
 import {
   describeCompactionEditDenial, describeModeEditDenial, describeModeToolDenial, PRE_MODE_DENIAL,
 } from "workbench-shared/workbench/thread/workflow-denials";
 import {
-  awaitsFirstMode, compactionRecoveryNeeds, currentAlwaysEditable, currentWorkflowMode, effectiveWorkflowMode, findWorkflowMode,
+  awaitsFirstMode, compactionRecoveryNeeds, currentProcessDocuments, currentWorkflowMode, effectiveWorkflowMode, findWorkflowMode,
   PRE_MODE_TOOLS, THREAD_STATE_TOOL, type WorkflowLedgerEntry, type WorkflowMode,
 } from "workbench-shared/workbench/thread/workflow-modes";
 import {
@@ -35,14 +37,16 @@ export interface WorkbenchThreadWorkflow {
   ledger: WorkflowLedgerEntry[];
   mode: string | null;
   definition: WorkflowMode | null;
-  alwaysEditable: readonly string[];
+  processDocuments: readonly string[];
   projectRoot: string | null;
 }
 
 type GateState = Pick<WorkbenchThreadWorkflow, "ledger" | "overlays" | "projectRoot">;
 
 const GIT_ARC_EDIT_TOOL_PREFIX = "git_arc_edit_";
-const GIT_ARC_WORKTREE_TOOLS: ReadonlySet<string> = new Set(["git_arc_restore", "git_arc_stash", "git_arc_unstash"]);
+const GIT_ARC_RESTORE_TOOL = "git_arc_restore";
+const GIT_ARC_WORKTREE_TOOLS: ReadonlySet<string> = new Set([GIT_ARC_RESTORE_TOOL, "git_arc_stash", "git_arc_unstash"]);
+const RestoreInputSchema = z.object({ ref: z.string() }).passthrough();
 
 function comparable(value: string) {
   return path.resolve(value).replaceAll("\\", "/").toLowerCase();
@@ -50,6 +54,12 @@ function comparable(value: string) {
 
 function isWorktreeTool(toolName: string) {
   return toolName.startsWith(GIT_ARC_EDIT_TOOL_PREFIX) || GIT_ARC_WORKTREE_TOOLS.has(toolName);
+}
+
+function isProcessDocumentRestore(toolName: string, input: unknown) {
+  if (toolName !== GIT_ARC_RESTORE_TOOL) return false;
+  const parsed = RestoreInputSchema.safeParse(input);
+  return parsed.success && parseProcessDocumentRevision(parsed.data.ref) !== null;
 }
 
 export default class WorkbenchThreadWorkflowReader {
@@ -80,7 +90,7 @@ export default class WorkbenchThreadWorkflowReader {
   async read(threadId: string): Promise<WorkbenchThreadWorkflow> {
     const [ledger, { overlays, projectRoot }] = await Promise.all([this.ports.readLedger(threadId), this.readOverlays(threadId)]);
     const mode = currentWorkflowMode(ledger);
-    return { overlays, ledger, mode, definition: findWorkflowMode(overlays.modes, mode), alwaysEditable: currentAlwaysEditable(ledger), projectRoot };
+    return { overlays, ledger, mode, definition: findWorkflowMode(overlays.modes, mode), processDocuments: currentProcessDocuments(ledger), projectRoot };
   }
 
   async #state(threadId: string): Promise<GateState> {
@@ -89,7 +99,7 @@ export default class WorkbenchThreadWorkflowReader {
   }
 
   /**
-   * Locks outrank modes and always-editable paths: before a first mode only PRE_MODE_TOOLS run, and an unrecovered compaction
+   * Locks outrank modes and process documents: before a first mode only PRE_MODE_TOOLS run, and an unrecovered compaction
    * denies every edit. `edit` tells the lock whether the call writes files.
    */
   #lockDenial({ ledger, overlays }: GateState, edit: boolean) {
@@ -99,7 +109,7 @@ export default class WorkbenchThreadWorkflowReader {
   }
 
   /**
-   * `edit` denies every requested path, `edit:claims` only claimed Git-visible ones; always-editable paths are exempt. Undeclared
+   * `edit` denies every requested path, `edit:claims` only claimed Git-visible ones; process documents are exempt. Undeclared
    * modes follow the first declared mode's rules.
    */
   async readEditDenial(threadId: string, requested: readonly string[], claimed: readonly string[]) {
@@ -109,10 +119,9 @@ export default class WorkbenchThreadWorkflowReader {
     if (lock) return lock;
     const definition = effectiveWorkflowMode(state.ledger, state.overlays.modes);
     if (!definition?.deny.length) return null;
-    const alwaysEditable = currentAlwaysEditable(state.ledger);
     const { projectRoot } = state;
     const scope = definition.deny.includes("edit") ? requested : definition.deny.includes("edit:claims") ? claimed : [];
-    const exempt = new Set(alwaysEditable.map(entry => comparable(projectRoot ? path.resolve(projectRoot, entry) : entry)));
+    const exempt = new Set(currentProcessDocuments(state.ledger).map(entry => comparable(projectRoot ? path.resolve(projectRoot, entry) : entry)));
     const denied = scope.filter(candidate => !exempt.has(comparable(candidate)));
     if (!denied.length) return null;
     return describeModeEditDenial(definition.name, definition.deny.includes("edit") ? "file edits" : "edits to Git-visible files", denied);
@@ -120,9 +129,10 @@ export default class WorkbenchThreadWorkflowReader {
 
   /**
    * thread_state can never be denied, so a lock or denying mode can always be left. Edit denials and the compaction lock also
-   * cover Git arc tools that write the worktree; `read` names native file-read tools.
+   * cover Git arc tools that write the worktree; `read` names native file-read tools. Process documents are editable in every
+   * mode, so restoring one from its backups is too, though the locks still hold.
    */
-  async readToolDenial(threadId: string, toolName: string) {
+  async readToolDenial(threadId: string, toolName: string, input?: unknown) {
     if (toolName === THREAD_STATE_TOOL) return null;
     const state = await this.#state(threadId);
     const worktreeTool = isWorktreeTool(toolName);
@@ -131,7 +141,7 @@ export default class WorkbenchThreadWorkflowReader {
     if (lock) return lock;
     const definition = effectiveWorkflowMode(state.ledger, state.overlays.modes);
     const deny = definition?.deny ?? [];
-    const editTool = worktreeTool && deny.some(token => token === "edit" || token === "edit:claims");
+    const editTool = worktreeTool && !isProcessDocumentRestore(toolName, input) && deny.some(token => token === "edit" || token === "edit:claims");
     if (!definition || (!deny.includes(toolName) && !editTool)) return null;
     return describeModeToolDenial(definition.name, toolName);
   }

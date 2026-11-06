@@ -616,10 +616,10 @@ export const WORKBENCH_CLI_COMMAND_MATCHERS: CommandMatcherDefinition[] = [
       const normalized = stage.text.trim();
       if (summaryParts.length || !THREAD_STATE_COMMAND.test(normalized)) return null;
       const files = ["proofs-json", "not-applicable"].some(flag => readFlagValue(normalized, flag));
-      const editable = /(?:^|\s)--(?:always-editable|clear-always-editable)(?:\s|=|$)/u.test(normalized);
+      const documents = /(?:^|\s)--(?:process-document|clear-process-documents)(?:\s|=|$)/u.test(normalized);
       const mode = readFlagValue(normalized, "mode");
       return getWorkbenchCommandRendering("thread_state", {
-        ...files ? { proofs: {} } : {}, ...editable ? { alwaysEditable: [] } : {}, ...mode ? { mode } : {},
+        ...files ? { proofs: {} } : {}, ...documents ? { processDocuments: [] } : {}, ...mode ? { mode } : {},
       })?.result ?? null;
     },
   }),

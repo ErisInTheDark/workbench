@@ -14,7 +14,7 @@
  * - awaitsFirstMode: whether a workflow declaring modes has never entered one.
  * - CompactionRecovery/compactionRecoveryNeeds/describeCompactionRecovery: what the latest compaction still needs, and its readable form.
  * - readThreadStateCall/readModeEntered/readFiledProofs: a transcript call's thread_state arguments, entered mode, and filed proofs.
- * - currentWorkflowMode/currentAlwaysEditable: a ledger's latest entered mode and always-editable paths.
+ * - currentWorkflowMode/currentProcessDocuments: a ledger's latest entered mode and process documents.
  * - effectiveWorkflowMode: the declared mode whose rules apply, falling back to the first declared one.
  * - findWorkflowMode: the definition a mode name selects.
  * - evaluateThreadStateTransition: whether one call may apply its mode and status from the current mode, naming every refusal,
@@ -46,8 +46,8 @@ export const ThreadStateSchema = z.object({
   title: z.string().trim().min(1).optional(),
   currentTitle: z.string().min(1).optional().describe("Exact current title when retitling; omit only when no title is set."),
   status: z.enum(["completed", "blocked"]).optional(),
-  alwaysEditable: z.array(z.string().trim().min(1)).optional()
-    .describe("Replaces the paths every mode may edit; [] clears it."),
+  processDocuments: z.array(z.string().trim().min(1)).optional()
+    .describe("Replaces this thread's process documents: exact file paths every mode may edit, hidden from commits and backed up; [] clears them."),
 }).strict();
 export type ThreadState = z.infer<typeof ThreadStateSchema>;
 
@@ -92,7 +92,7 @@ export interface WorkflowLedgerSource {
 export type WorkflowLedgerEntry =
   | { readonly kind: "proof"; readonly proof: ProofOfWork }
   | { readonly kind: "mode"; readonly mode: string }
-  | { readonly kind: "editable"; readonly paths: readonly string[] }
+  | { readonly kind: "processDocuments"; readonly paths: readonly string[] }
   | { readonly kind: "message"; readonly audience: MessageAudience }
   | { readonly kind: "compaction" }
   | { readonly kind: "recall" };
@@ -108,15 +108,23 @@ function proofOf(state: ThreadState): ProofOfWork | null {
   return parsed.success ? parsed.data : null;
 }
 
+/** Recorded calls predate retired fields; the schema is strict, so an unmapped one would lose the whole call and its proofs. */
+function currentThreadStateArgs(args: unknown) {
+  const current = withoutRetiredProofFields(args);
+  if (current === null || typeof current !== "object" || !("alwaysEditable" in current)) return current;
+  const { alwaysEditable, ...rest } = current as Record<string, unknown>;
+  return { ...rest, processDocuments: alwaysEditable };
+}
+
 /** A refused thread_state call still files its proofs; its other changes never applied. Legacy calls count only on success. */
 export function readWorkflowLedgerEntries({ threadId, tool, args, failed }: WorkflowLedgerSource): WorkflowLedgerEntry[] {
   if (tool === THREAD_STATE_TOOL) {
-    const parsed = ThreadStateSchema.safeParse(withoutRetiredProofFields(args));
+    const parsed = ThreadStateSchema.safeParse(currentThreadStateArgs(args));
     if (!parsed.success) return [];
     const proof = proofOf(parsed.data);
     const entries: WorkflowLedgerEntry[] = proof ? [{ kind: "proof", proof }] : [];
     if (failed) return entries;
-    if (parsed.data.alwaysEditable) entries.push({ kind: "editable", paths: parsed.data.alwaysEditable });
+    if (parsed.data.processDocuments) entries.push({ kind: "processDocuments", paths: parsed.data.processDocuments });
     if (parsed.data.mode) entries.push({ kind: "mode", mode: parsed.data.mode });
     return entries;
   }
@@ -145,7 +153,7 @@ function isWorkbenchCall(item: ThreadItem, tool: string): item is Extract<Thread
 /** A thread_state call's arguments and whether it applied; null for other items and unreadable arguments. */
 export function readThreadStateCall(item: ThreadItem) {
   if (!isWorkbenchCall(item, THREAD_STATE_TOOL)) return null;
-  const parsed = conformToZodSchema(ThreadStateSchema, withoutRetiredProofFields(item.arguments));
+  const parsed = conformToZodSchema(ThreadStateSchema, currentThreadStateArgs(item.arguments));
   if (!parsed.success || parsed.discardedPaths.length) return null;
   return { state: parsed.data, applied: item.status === "completed" && !item.error, settled: item.status !== "inProgress" };
 }
@@ -220,10 +228,10 @@ export function describeCompactionRecovery({ recall, proofs }: CompactionRecover
   ].filter(Boolean).join(" and ");
 }
 
-export function currentAlwaysEditable(ledger: readonly WorkflowLedgerEntry[]): readonly string[] {
+export function currentProcessDocuments(ledger: readonly WorkflowLedgerEntry[]): readonly string[] {
   for (let index = ledger.length - 1; index >= 0; index -= 1) {
     const entry = ledger[index]!;
-    if (entry.kind === "editable") return entry.paths;
+    if (entry.kind === "processDocuments") return entry.paths;
   }
   return [];
 }

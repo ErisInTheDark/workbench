@@ -226,6 +226,14 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         return { threadId: identity.threadId };
       },
       readWorkflow: async threadId => await threadWorkflow.read(threadId),
+      admitProcessDocuments: async ({ cwd, harness, threadId }, paths) => {
+        const { identity, binding } = await nativeTarget(threadId, cwd, harness);
+        await gitArc.admitProcessDocuments(cwd, WorkbenchHarnessSchema.parse(binding.harness), identity.threadId, paths);
+      },
+      backupProcessDocuments: async ({ cwd, harness, threadId }, paths) => {
+        const { identity, binding } = await nativeTarget(threadId, cwd, harness);
+        return await gitArc.backupProcessDocuments(cwd, WorkbenchHarnessSchema.parse(binding.harness), identity.threadId, paths);
+      },
       readTitle: async ({ cwd, threadId }) => {
         const { title } = await managedThread("workbench/thread/title", { action: "get", callerThreadId: threadId, cwd });
         return typeof title === "string" ? title : "";
@@ -431,7 +439,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       executeToolStats: async (body, signal) => await toolStats.execute(body, signal),
       executeFeedbackSubmit: async (body, signal) => await feedback.submit(body, signal),
       executeThreadStateRequest: async (body, signal) => await threadStateCommand.execute(body, signal),
-      readModeToolDenial: async (threadId, toolName) => await threadWorkflow.readToolDenial(threadId, toolName),
+      readModeToolDenial: async (threadId, toolName, input) => await threadWorkflow.readToolDenial(threadId, toolName, input),
       executeTodoRequest: async (body, signal) => {
         const parsed = WorkbenchTodoRequestSchema.safeParse(body);
         if (!parsed.success) {

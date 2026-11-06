@@ -415,6 +415,18 @@ export default class WorkbenchGitArcFeature {
     return modeDenial ? { ...result, allowed: false, modeDenial } : result;
   }
 
+  async admitProcessDocuments(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId, paths: readonly string[]) {
+    const project = await this.resolveProject(cwd, threadId);
+    const owner = await this.gitThreadIdentity(project, harness, threadId);
+    await this.workspaceController.admitProcessDocuments(project, owner.harness, owner.threadId, paths);
+  }
+
+  async backupProcessDocuments(cwd: string, harness: WorkbenchHarness, threadId: WorkbenchThreadId, paths: readonly string[]) {
+    const project = await this.resolveProject(cwd, threadId);
+    const owner = await this.gitThreadIdentity(project, harness, threadId);
+    return await this.workspaceController.backupProcessDocuments(project, owner.harness, owner.threadId, paths);
+  }
+
   async listReloadScopeClaims(_cwd: string) {
     return [];
   }

@@ -68,6 +68,7 @@ import GitArcStackEditor from "./GitArcStackEditor";
 import GitArcClaimViewController, { type GitArcClaimViewInput, type GitArcHeldPathsInput } from "./GitArcClaimViewController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
+import GitProcessDocumentStore from "./GitProcessDocumentStore";
 import { absorbMachineBaseline } from "./machine-git-baseline";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
 import GitArcStashController from "./GitArcStashController";
@@ -90,6 +91,7 @@ import {
   normalizeCommit,
   normalizeThreadId,
   parseMarkedMetadata,
+  parseProcessDocumentRevision,
 } from "workbench-shared/workbench/git/git-arc-storage";
 
 export type { GitArcProposalStatus } from "workbench-shared/workbench/git/git-arc-storage";
@@ -1366,6 +1368,20 @@ export default class WorkbenchGitCheckpointController {
     return diff;
   }
 
+  private processDocuments(repository: WorkbenchGitRepository) {
+    return new GitProcessDocumentStore(repository, this.resolveThreadIdentity);
+  }
+
+  async admitProcessDocuments({ cwd, harness, paths, threadId }: { cwd: string; harness: string; paths: readonly string[]; threadId: string }) {
+    await this.processDocuments(new WorkbenchGitRepository(await resolveRepoRoot(cwd))).admit({ harness: normalizeHarness(harness), threadId }, paths);
+  }
+
+  async backupProcessDocuments({ cwd, harness, paths, threadId }: { cwd: string; harness: string; paths: readonly string[]; threadId: string }) {
+    return await GitObjectReadSession.run(async () => (
+      await this.processDocuments(new WorkbenchGitRepository(await resolveRepoRoot(cwd))).backup({ harness: normalizeHarness(harness), threadId }, paths)
+    ));
+  }
+
   async restore({
     checkpointCommit,
     confirmRestore,
@@ -1387,6 +1403,11 @@ export default class WorkbenchGitCheckpointController {
       const repoRoot = await resolveRepoRoot(cwd);
       const harness = normalizeHarness(rawHarness);
       const repository = new WorkbenchGitRepository(repoRoot);
+      const backupRevision = parseProcessDocumentRevision(checkpointCommit);
+      if (backupRevision !== null) {
+        if (!rawPaths?.length) throw new Error("Process document restore needs paths.");
+        return await this.processDocuments(repository).restore({ harness, threadId }, backupRevision, rawPaths);
+      }
 
       if (!rawPaths?.length) {
         const registry = this.registry(repository);

@@ -244,7 +244,7 @@ function ThreadRenderableBlockViewComponent ({
         <ThreadModeDivider
           mode={block.mode}
           proofs={[...block.earlier, ...block.items]}
-          editable={readThreadStateCall(block.items[0])?.state.alwaysEditable ?? null}
+          processDocuments={readThreadStateCall(block.items[0])?.state.processDocuments ?? null}
           title={readThreadStateCall(block.items[0])?.state.title ?? null}
         />
       );

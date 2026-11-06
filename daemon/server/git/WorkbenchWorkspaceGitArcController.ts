@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkspaceGitArcMemberError: preserve failed/completed member facts around the original failure.
- * - default WorkbenchWorkspaceGitArcController: aggregate status, recovery, stack layers and paged diffs; route mutations, history retention and durable-commit time reads; admit agent file changes.
+ * - default WorkbenchWorkspaceGitArcController: aggregate status, recovery, stack layers and paged diffs; route mutations, process documents, history retention and durable-commit time reads; admit agent file changes.
  * - WorkspaceGitArcMemberState: active repository plus root identity.
  * - WorkspaceGitArcLifecycleState: workspace lifecycle projection.
  * - WorkspaceGitArcPlanMemberState: planned repository plus root identity.
@@ -47,6 +47,7 @@ import GitObjectReadSession from "../lib/workbench/git/GitObjectReadSession";
 import WorkbenchGitRepository, { type GitWorktreeSnapshot } from "../lib/workbench/git/WorkbenchGitRepository";
 import { listGitArcScopeFiles } from "../lib/workbench/git/git-arc-claim-expansion";
 import type { GitArcStatus } from "workbench-shared/workbench/git/git-arc-status";
+import { parseProcessDocumentRevision } from "workbench-shared/workbench/git/git-arc-storage";
 import type { AgentEndpointProjectResolution } from "../lib/workbench/project/agent-endpoint-project";
 import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
 import type { GitArcPreparedOperation } from "../lib/workbench/git/GitArcRegistry";
@@ -465,6 +466,39 @@ export default class WorkbenchWorkspaceGitArcController {
       }
     }
     return times;
+  }
+
+  /** Paths in roots without a repository stay listable: they only skip hiding and backups. */
+  private placeProcessDocuments(project: AgentEndpointProjectResolution, members: readonly RepoMember[], paths: readonly string[]) {
+    const placed = new Map<string, string[]>();
+    for (const candidate of paths) {
+      const { absolute, root } = this.parseRootPath(project, candidate, project.root.id);
+      const member = members.find(({ roots }) => roots.some(({ id }) => id === root.id));
+      if (member) placed.set(member.repoRoot, [...placed.get(member.repoRoot) ?? [], absolute]);
+    }
+    return placed;
+  }
+
+  /** Every Git member re-syncs, so a document dropped from the list unhides wherever it lives. */
+  async admitProcessDocuments(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string, paths: readonly string[]) {
+    const members = await this.resolveRepoMembers(project);
+    const placed = this.placeProcessDocuments(project, members, paths);
+    const selected = members.filter(member => !isMachineMember(member));
+    if (!selected.length) return;
+    await this.runMembers(selected, async member => await this.local.admitProcessDocuments({
+      cwd: member.repoRoot, harness, paths: placed.get(member.repoRoot) ?? [], threadId,
+    }));
+  }
+
+  async backupProcessDocuments(project: AgentEndpointProjectResolution, harness: WorkbenchHarness, threadId: string, paths: readonly string[]) {
+    const members = await this.resolveRepoMembers(project);
+    const placed = this.placeProcessDocuments(project, members, paths);
+    const selected = members.filter(({ repoRoot }) => placed.has(repoRoot));
+    if (!selected.length) return [];
+    const values = await this.runMembers(selected, async member => await this.local.backupProcessDocuments({
+      cwd: member.repoRoot, harness, paths: placed.get(member.repoRoot)!, threadId,
+    }));
+    return values.flatMap(({ result }) => result ? [result] : []);
   }
 
   async pruneThreadHistories(
@@ -1777,7 +1811,13 @@ export default class WorkbenchWorkspaceGitArcController {
   ) {
     const groups = this.groupRootPaths(project, members, request.paths ?? [], request.roots);
     const refs = this.refsByRepo(project, members, request.refs);
-    if (request.checkpointCommit) refs.set((await this.callerMember(project, members, request)).repoRoot, request.checkpointCommit);
+    if (request.checkpointCommit) {
+      // Backups live in each document's own repository, whichever repository the caller sits in.
+      const targets = parseProcessDocumentRevision(request.checkpointCommit) !== null && groups.length
+        ? groups.map(({ member }) => member)
+        : [await this.callerMember(project, members, request)];
+      for (const member of targets) refs.set(member.repoRoot, request.checkpointCommit);
+    }
     if (request.confirmRestore && !refs.size) {
       const lifecycle = await this.findLifecycleState(project, request.harness, request.threadId);
       for (const member of lifecycle?.members ?? []) refs.set(member.repoRoot, member.checkpointCommit);
