@@ -124,6 +124,8 @@ export default class WorkbenchCodexInstructionAdapter implements WorkbenchCodexI
     } : withWorkbenchCodexSandboxConfig({
       ...ownedParams,
       config: {
+        // Workbench spills oversized wb output itself, so Codex's own cut is only a crash guard.
+        tool_output_token_limit: 50_000,
         ...asRecord(params.config), model: settings.model, model_reasoning_effort: settings.reasoningEffort,
         ...(settings.contextWindowTokens != null ? {
           model_context_window: settings.contextWindowTokens,

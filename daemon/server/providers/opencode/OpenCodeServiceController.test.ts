@@ -385,6 +385,31 @@ test("preserves existing inline OpenCode config while adding the companion", asy
   await controller.dispose();
 });
 
+test("raises OpenCode's tool output cut unless the user's inline config already chose a limit", async () => {
+  const toolOutput = async (inline: object) => {
+    let ensureOptions: EnsureOptions | undefined;
+    const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
+      prepareServiceDirectory: async () => undefined,
+      environment: { OPENCODE_CONFIG_CONTENT: JSON.stringify(inline) },
+      ensureService: async options => {
+        ensureOptions = options;
+        return { url: "http://127.0.0.1:4096" };
+      },
+      createClient: () => ({
+        model: modelApi,
+        plugin: { list: async () => ({ data: [{ id: "workbench", state: { status: "active" } }] }) },
+      } as never),
+      stopService: async () => undefined,
+    });
+    await controller.acquire();
+    await controller.dispose();
+    return (JSON.parse(ensureOptions?.env?.OPENCODE_CONFIG_CONTENT ?? "{}") as { tool_output?: { max_bytes?: number; max_lines?: number } }).tool_output;
+  };
+  const raised = await toolOutput({});
+  assert.ok(raised?.max_bytes && raised.max_bytes > 50 * 1024);
+  assert.deepEqual(await toolOutput({ tool_output: { max_lines: 10 } }), { max_lines: 10 });
+});
+
 test("stops a dedicated service that did not load the Workbench companion", async () => {
   const controller = new OpenCodeServiceController({ resolveRuntime: testRuntime,
     prepareServiceDirectory: async () => undefined,

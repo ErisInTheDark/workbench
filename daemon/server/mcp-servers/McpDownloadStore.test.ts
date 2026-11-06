@@ -161,6 +161,34 @@ test("past its byte cap a thread drops its oldest kept results, never the newest
   } finally { await close(); }
 });
 
+test("kept text stays raw so its lines can be read, and older JSON keeps reading", async () => {
+  const { store, close } = await setup({});
+  try {
+    const kept = await store.keep(THREAD, "log", "one\ntwo\n");
+    assert.equal(await readFile(kept.path, "utf8"), "one\ntwo\n");
+    assert.equal(await store.readKept(THREAD, "log"), "one\ntwo\n");
+    await store.keep(THREAD, "log", { now: "json" });
+    assert.deepEqual(await store.readKept(THREAD, "log"), { now: "json" }, "a name holds one result across formats");
+  } finally { await close(); }
+});
+
+test("spills are raw text, share kept results' cap, are no @result value, and go when the thread settles", async () => {
+  const { store, settle, settledThreads, files, close } = await setup({}, {}, { maxKeptBytesPerThread: 60 });
+  try {
+    settledThreads.set(THREAD, false);
+    store.start();
+    await store.idle();
+    await store.keep(THREAD, "old", { value: "x".repeat(20) });
+    const spill = await store.spill(THREAD, `line one\n${"y".repeat(50)}\n`);
+    assert.equal(await readFile(spill.path, "utf8"), `line one\n${"y".repeat(50)}\n`);
+    assert.equal(await store.readKept(THREAD, "old"), null, "the oldest result went past the shared cap");
+    assert.equal(await store.readKept(THREAD, "output"), null);
+    settle(THREAD);
+    await store.dispose();
+    assert.deepEqual(await files(), []);
+  } finally { await close(); }
+});
+
 const textFile = (body: string) => () => new Response(body, { headers: { "content-type": "text/plain" } });
 
 test("settling a thread deletes its downloads, and only its own", async () => {

@@ -27,6 +27,12 @@ test("counts rendered skill text without recording a skill load", async () => {
   assert.equal(calls, 1);
 });
 
+test("a count that split long unbroken runs says it is approximate, instead of stalling the daemon", async () => {
+  const controller = new WorkbenchTokenCountController({ projectRoot: process.cwd(), resolveProjectFromCwd: async () => { throw new Error("unused"); } });
+  const response = await controller.execute({ cwd: process.cwd(), kind: "text", model: "gpt-5.6", text: "x".repeat(100_000) }, new AbortController().signal);
+  assert.match(await response.text(), /^about 12500 tokens for gpt-5\.6\n$/u);
+});
+
 test("passes skill rendering failures through without reporting a count", async () => {
   const controller = new WorkbenchTokenCountController({
     projectRoot: "C:/workbench",

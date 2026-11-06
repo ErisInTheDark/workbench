@@ -3,9 +3,9 @@
  * - McpDownload: one saved download, with its file name, absolute path, content type and size.
  * - McpKeptResult: one kept tool result's name, JSON file path and size.
  * - McpDownloadStoreOptions: cache directory, database, thread lifecycle and network ports.
- * - default McpDownloadStore: single owner of a thread's MCP files: downloads of links servers sent (refusing local and
- *   private addresses, re-checked on every redirect, size-capped) and kept tool results (one per name, capped per thread);
- *   all are deleted when their thread settles.
+ * - default McpDownloadStore: single owner of a thread's tool files: downloads of links servers sent (refusing local and
+ *   private addresses, re-checked on every redirect, size-capped), kept tool results (one per name) and spilled tool output,
+ *   the last two capped per thread together; all are deleted when their thread settles.
  */
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
@@ -58,6 +58,8 @@ const KEPT_NAME = /^[A-Za-z0-9_-]{1,64}$/u;
 const KEPT_PREFIX = "kept-";
 /** `-` plus a UUID. */
 const KEPT_SUFFIX_LENGTH = 37;
+const SPILL_PREFIX = "spill-";
+const SPILL_FILE = "output.txt";
 const MAX_KEPT_BYTES = 4 * 1024 * 1024;
 const MAX_KEPT_BYTES_PER_THREAD = 256 * 1024 * 1024;
 
@@ -162,16 +164,43 @@ export default class McpDownloadStore {
   }
 
   /**
-   * Keep a tool result as pretty-printed JSON, so agents can read slices of it with file tools and components can take it as a
-   * prop. A name holds one result; keeping it again replaces the old file. The oldest kept results go past the thread's cap.
+   * Keep a tool result so agents can read slices of it with file tools and components can take it as a prop: text stays raw so its
+   * lines survive, anything else is pretty-printed JSON. A name holds one result; keeping it again replaces the old file.
    */
   async keep(threadId: string, name: string, value: unknown): Promise<McpKeptResult> {
     if (!KEPT_NAME.test(name)) throw new Error("Kept result names use 1-64 letters, digits, - or _.");
-    const body = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+    const text = typeof value === "string";
+    const body = Buffer.from(text ? value : `${JSON.stringify(value, null, 2)}\n`, "utf8");
     if (body.byteLength > MAX_KEPT_BYTES) throw new Error(`The result is larger than ${MAX_KEPT_BYTES} bytes and cannot be kept.`);
     const id = `${KEPT_PREFIX}${name}-${randomUUID()}`;
+    const file = await this.#write(threadId, id, `${name}.${text ? "txt" : "json"}`, body);
+    const replaced = (await this.#saved(threadId)).filter(entry => entry.id !== id && entry.name === name);
+    await this.#remove(replaced);
+    await this.#enforceCap(threadId, id);
+    return { name, path: file, bytes: body.byteLength };
+  }
+
+  /** Save the text of an oversized tool result; it shares kept results' cap and lifetime but has no name and is no `@result:` value. */
+  async spill(threadId: string, text: string): Promise<{ path: string }> {
+    const body = Buffer.from(text, "utf8");
+    if (body.byteLength > MAX_KEPT_BYTES) throw new Error(`The output is larger than ${MAX_KEPT_BYTES} bytes.`);
+    const id = `${SPILL_PREFIX}${randomUUID()}`;
+    const file = await this.#write(threadId, id, SPILL_FILE, body);
+    await this.#enforceCap(threadId, id);
+    return { path: file };
+  }
+
+  /** The kept result's value, or null when the thread kept nothing under that name. */
+  async readKept(threadId: string, name: string): Promise<unknown> {
+    const entry = (await this.#saved(threadId)).findLast(candidate => candidate.name === name);
+    if (!entry) return null;
+    const body = await readFile(entry.file, "utf8");
+    return entry.file.endsWith(".txt") ? body : JSON.parse(body) as unknown;
+  }
+
+  async #write(threadId: string, id: string, name: string, body: Buffer) {
     const directory = path.join(this.options.directory, id);
-    const file = path.join(directory, `${name}.json`);
+    const file = path.join(directory, name);
     await mkdir(directory, { recursive: true });
     try {
       await writeFile(file, body);
@@ -183,36 +212,32 @@ export default class McpDownloadStore {
       throw error;
     }
     this.#owners.add(threadId);
-    const kept = await this.#kept(threadId);
-    const evicted = kept.filter(entry => entry.id !== id && entry.name === name);
-    let rest = kept.filter(entry => !evicted.includes(entry));
-    let bytes = rest.reduce((sum, entry) => sum + entry.bytes, 0);
-    while (bytes > (this.options.maxKeptBytesPerThread ?? MAX_KEPT_BYTES_PER_THREAD)) {
-      const oldest = rest[0]!;
-      if (oldest.id === id) break;
-      evicted.push(oldest);
-      rest = rest.slice(1);
-      bytes -= oldest.bytes;
+    return file;
+  }
+
+  /** The oldest saved results go past the thread's cap, never the one just written. */
+  async #enforceCap(threadId: string, newest: string) {
+    const saved = await this.#saved(threadId);
+    const evicted: typeof saved = [];
+    let bytes = saved.reduce((sum, entry) => sum + entry.bytes, 0);
+    for (const entry of saved) {
+      if (bytes <= (this.options.maxKeptBytesPerThread ?? MAX_KEPT_BYTES_PER_THREAD) || entry.id === newest) break;
+      evicted.push(entry);
+      bytes -= entry.bytes;
     }
     await this.#remove(evicted);
-    return { name, path: file, bytes: body.byteLength };
   }
 
-  /** The kept result's value, or null when the thread kept nothing under that name. */
-  async readKept(threadId: string, name: string): Promise<unknown> {
-    const entry = (await this.#kept(threadId)).findLast(candidate => candidate.name === name);
-    if (!entry) return null;
-    return JSON.parse(await readFile(entry.file, "utf8")) as unknown;
-  }
-
-  /** A thread's kept results, oldest first. */
-  async #kept(threadId: string) {
+  /** A thread's kept results and spills, oldest first; spills have no name. */
+  async #saved(threadId: string) {
     const rows = await this.options.database.query(selectRows(mcpDownloads, { where: { thread_id: threadId } }));
-    const entries = await Promise.all(rows.filter(row => row.id.startsWith(KEPT_PREFIX)).map(async row => {
-      const name = row.id.slice(KEPT_PREFIX.length, -KEPT_SUFFIX_LENGTH);
-      const file = path.join(row.directory, `${name}.json`);
-      const bytes = await stat(file).then(info => info.size, () => 0);
-      return { id: row.id, name, file, directory: row.directory, bytes, createdAt: row.created_at };
+    const entries = await Promise.all(rows.filter(row => row.id.startsWith(KEPT_PREFIX) || row.id.startsWith(SPILL_PREFIX)).map(async row => {
+      const kept = row.id.startsWith(KEPT_PREFIX);
+      const name = kept ? row.id.slice(KEPT_PREFIX.length, -KEPT_SUFFIX_LENGTH) : null;
+      const candidates = (kept ? [`${name}.txt`, `${name}.json`] : [SPILL_FILE]).map(file => path.join(row.directory, file));
+      const sizes = await Promise.all(candidates.map(async file => await stat(file).then(info => info.size, () => null)));
+      const found = Math.max(0, sizes.findIndex(size => size !== null));
+      return { id: row.id, name, file: candidates[found]!, directory: row.directory, bytes: sizes[found] ?? 0, createdAt: row.created_at };
     }));
     return entries.sort((left, right) => left.createdAt - right.createdAt);
   }

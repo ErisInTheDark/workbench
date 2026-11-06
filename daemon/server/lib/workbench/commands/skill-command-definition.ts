@@ -28,6 +28,7 @@ const skill = defineWorkbenchAgentCommand({
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["skill"],
   mcpCodeModeEligible: true,
+  mcpFullOutput: true,
   mcpWorkdir: true,
   words: ["skill"],
   usage: "wb skill [--locate] <name>",

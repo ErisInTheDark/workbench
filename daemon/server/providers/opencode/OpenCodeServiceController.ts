@@ -47,6 +47,8 @@ function serviceEnvironment(
   const configured = Array.isArray(config.plugins) ? config.plugins : [];
   config.$schema = typeof config.$schema === "string" ? config.$schema : "https://opencode.ai/config.json";
   config.plugins = [...configured.filter(entry => entry !== pluginSource), pluginSource];
+  // Workbench spills oversized wb output itself, keeping both ends; OpenCode's whole-line cut is only a crash guard.
+  config.tool_output ??= { max_bytes: 200 * 1024, max_lines: 20_000 };
   return {
     ...(environment.OPENCODE_CONFIG_DIR ? { OPENCODE_CONFIG_DIR: environment.OPENCODE_CONFIG_DIR } : {}),
     ...(environment.OPENCODE_DB ? { OPENCODE_DB: environment.OPENCODE_DB } : {}),

@@ -513,6 +513,7 @@ test("downloads fetch, without asking, only links the server itself sent", async
     const fetched: string[] = [];
     const owner = create({
       downloads: {
+        spill: async () => { throw new Error("unexpected spill"); },
         download: async (threadId, url, name) => {
           fetched.push(`${threadId} ${url} ${name}`);
           return { name: "Doc.html", path: "/cache/Doc.html", contentType: "text/html", bytes: 9 };
@@ -543,6 +544,7 @@ test("a kept call saves its data for the calling thread, and keepOnly withholds 
     const kept: { threadId: string; name: string; value: unknown }[] = [];
     const owner = create({
       downloads: {
+        spill: async () => { throw new Error("unexpected spill"); },
         download: async () => { throw new Error("unexpected download"); },
         keep: async (threadId, name, value) => { kept.push({ threadId, name, value }); return { name, path: `/cache/${name}.json`, bytes: 42 }; },
       },
@@ -576,6 +578,7 @@ test("a Workbench tool's result keeps under the same rules, and an error is neve
     const kept: { threadId: string; name: string; value: unknown }[] = [];
     const owner = create({
       downloads: {
+        spill: async () => { throw new Error("unexpected spill"); },
         download: async () => { throw new Error("unexpected download"); },
         keep: async (threadId, name, value) => { kept.push({ threadId, name, value }); return { name, path: `/cache/${name}.json`, bytes: 42 }; },
       },

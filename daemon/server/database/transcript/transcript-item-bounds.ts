@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - MAX_TRANSCRIPT_ITEM_STRING_CHARS: largest text one item field may carry into settlement.
+ * - joinKeptEdges: the shared shape of text with its middle omitted.
  * - boundTranscriptItem: keep head and tail of any oversized string in an item, returning the same object when nothing exceeds the bound.
  * - boundTranscriptObservations: apply the item bound to item observations, including those nested in windows and turn scopes.
  */
@@ -14,11 +15,15 @@ import type { WorkbenchTranscriptAtomicObservation, WorkbenchTranscriptObservati
 export const MAX_TRANSCRIPT_ITEM_STRING_CHARS = 1024 * 1024;
 const KEPT_EDGE_CHARS = MAX_TRANSCRIPT_ITEM_STRING_CHARS / 2;
 
+/** `head`, a marker naming how much is gone and why, then `tail`. */
+export function joinKeptEdges(head: string, tail: string, omitted: number, detail: string) {
+  return `${head}\n[Workbench omitted ${omitted.toLocaleString("en-US")} characters${detail}]\n${tail}`;
+}
+
 function boundString(value: string) {
   // Inline images settle into the asset store; truncating one would corrupt it rather than shorten it.
   if (value.length <= MAX_TRANSCRIPT_ITEM_STRING_CHARS || value.startsWith("data:")) return value;
-  const omitted = value.length - 2 * KEPT_EDGE_CHARS;
-  return `${value.slice(0, KEPT_EDGE_CHARS)}\n[Workbench omitted ${omitted.toLocaleString("en-US")} characters to keep the thread responsive]\n${value.slice(-KEPT_EDGE_CHARS)}`;
+  return joinKeptEdges(value.slice(0, KEPT_EDGE_CHARS), value.slice(-KEPT_EDGE_CHARS), value.length - 2 * KEPT_EDGE_CHARS, " to keep the thread responsive");
 }
 
 export function boundTranscriptItem<Value>(value: Value): Value {

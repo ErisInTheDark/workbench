@@ -8,6 +8,8 @@ export function claudeEnvironment(
   const env: NodeJS.ProcessEnv = {
     // Streams commentary-tool text as it is generated; an explicit user setting still wins.
     CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING: "1",
+    // Workbench spills oversized wb output itself, so this limit is only a crash guard.
+    MAX_MCP_OUTPUT_TOKENS: "50000",
     ...process.env,
     ...view,
     // Claude Code's window cap; it outranks the model's native window and drives auto-compaction.

@@ -57,7 +57,7 @@ export interface WorkbenchMcpServerOptions {
    */
   resolveProject?: (projectId: string) => Promise<{ id: string; rootPath: string; identityKey: string | null }>;
   /** Fetches links servers sent; absent where downloads are not offered. */
-  downloads?: Pick<McpDownloadStore, "download" | "keep">;
+  downloads?: Pick<McpDownloadStore, "download" | "keep" | "spill">;
   /** Installs and launches npm-packaged stdio servers; absent where they are not offered. */
   packages?: Pick<McpPackageInstaller, "state" | "install" | "launch" | "remove">;
   user?: () => string;
@@ -601,9 +601,14 @@ export default class WorkbenchMcpServerController {
       try { JSON.parse(part.text); return []; } catch { return [`${part.text}\n`]; }
     });
     return {
-      keptLine: `Kept as \`@result:${kept.name}\` (${describeMcpKeptValue(value, kept.bytes)}). Full JSON: ${kept.path}\n`,
+      keptLine: `Kept as \`@result:${kept.name}\` (${describeMcpKeptValue(value, kept.bytes)}). Full ${typeof value === "string" ? "text" : "JSON"}: ${kept.path}\n`,
       notes: notes.join(""),
     };
+  }
+
+  async spillToolOutput(threadId: string, text: string) {
+    if (!this.options.downloads) throw new Error("Saved output is not available here.");
+    return await this.options.downloads.spill(threadId, text);
   }
 
   /** Keep what one of Workbench's own tools returned, with the same rules a user-added server's result gets. */

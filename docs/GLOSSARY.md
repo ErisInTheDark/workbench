@@ -25,6 +25,7 @@
 | steer admittance | The point when Workbench or the underlying harness accepts a steer for an active turn. Admittance associates the steer with that turn, but does not mean that the running agent has received it in model context |
 | steer delivery | The later point when an admitted steer is supplied to the running agent at an input boundary. Delivery makes the steer available to the agent's reasoning and can occur after a pending tool call completes |
 | held steer | An admitted steer awaiting delivery (pending) or never delivered (undelivered). Stored outside the transcript and shown as an overlay at the thread bottom until delivered, dismissed, or resent |
+| spill | Automatic save of an oversized wb tool result to a thread-owned file, leaving the model a head, tail and path. `keep` is the agent-requested form |
 | process document | File a thread keeps current to run long work (rules, status, decisions, questions). Editable in every mode, hidden from commits while listed, backed up on mode switch, reread after compaction |
 | compaction queue | User messages sent while a thread compacts. Held as pending steers on the latest turn, delivered as one merged message when compaction ends |
 | virtual steer | Pending held steer on an ended turn while its thread holds a pending questionnaire. Never sent to the provider; delivered after the answer in the continuation's first user message |

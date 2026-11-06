@@ -70,6 +70,7 @@ const recallSearch = defineWorkbenchAgentCommand({
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["thread", "thread-recall"],
   mcpCodeModeEligible: true,
+  mcpFullOutput: true,
   words: ["thread", "recall", "search"],
   usage: "wb thread recall search [--thread <id>] --query <words> [--kind <kind>...] [--limit <count>] [--cursor <cursor>]",
   inputSchema: z.object({
@@ -111,6 +112,7 @@ const recall = defineWorkbenchAgentCommand({
   effects: { idempotent: true, readOnly: true },
   helpGroups: ["thread", "thread-recall"],
   mcpCodeModeEligible: true,
+  mcpFullOutput: true,
   words: ["thread", "recall"],
   usage: "wb thread recall [--thread <id>] [--turn <id>] [--kind <kind>...] [--before <ref> | --after <ref> | --around <ref>]",
   inputSchema: z.object({

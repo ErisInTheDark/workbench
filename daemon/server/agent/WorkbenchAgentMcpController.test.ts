@@ -98,6 +98,53 @@ for (const name of ["thread_state", "shell"]) {
   });
 }
 
+test("oversized results spill for the model only, except tools whose text is the point", async () => {
+  const big = Array.from({ length: 3_000 }, (_, index) => `src/module${index}.ts:${index}: const value${index} = compute("item-${index}");\n`).join("");
+  const recorded: ProviderToolResult[] = [];
+  const saved: Array<{ threadId: string; text: string }> = [];
+  const reference = { threadId: "thread", turnId: "turn", itemId: "item", sourceId: "child", parentId: "parent", tool: "shell", arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: process.cwd() }),
+    describe: async () => ({ shellDescription: "test" }),
+    patchClaims: async () => "",
+    prepareExecution: async () => preparedShell(process.cwd()).run,
+    transcript: { start: async () => reference, finish: async (_pinned, result) => { recorded.push(result); } },
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools, daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    executeCommand: async () => new Response(big),
+    executeShell: async () => ({ exitCode: 1, stdout: big, stderr: "" }),
+    spillToolOutput: async (threadId, text) => { saved.push({ threadId, text }); return { path: "C:/files/output.txt" }; },
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  try {
+    const shell = await client.callTool({ name: "shell", arguments: { command: "test" } });
+    assert.match(responseText(shell), /^Exit code: 1\nOutput:\nsrc\/module0\.ts/u);
+    assert.match(responseText(shell), /Full output: C:\/files\/output\.txt/u);
+    assert.ok(responseText(shell).length < big.length / 2);
+    const fields = shell.structuredContent as { exitCode: number; stdout: string };
+    assert.equal(fields.exitCode, 1);
+    assert.match(fields.stdout, /Full output: C:\/files\/output\.txt/u);
+    assert.ok(fields.stdout.length < big.length / 2);
+    assert.equal((recorded[0]?.structuredContent as { stdout: string }).stdout, big, "the transcript keeps the whole output");
+    assert.equal(saved[0]?.threadId, "thread");
+    assert.ok(saved[0]?.text.includes(big));
+
+    const wrapped = await client.callTool({ name: "mcp_call", arguments: { server: "wb", tool: "rg", arguments: { args: ["x"] } } });
+    assert.match(responseText(wrapped), /Full output: C:\/files\/output\.txt/u);
+
+    const skill = await client.callTool({ name: "skill", arguments: { name: "browse" } });
+    assert.ok(responseText(skill).includes(big), "a skill's text is the point");
+    const wrappedSkill = await client.callTool({ name: "mcp_call", arguments: { server: "wb", tool: "skill", arguments: { name: "browse" } } });
+    assert.ok(responseText(wrappedSkill).includes(big), "and stays whole through mcp_call");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("OpenCode context handoff executes without admitting MCP arguments or results", async () => {
   const order: string[] = [];
   const captured: Array<{ arguments: unknown; result?: ProviderToolResult }> = [];

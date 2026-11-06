@@ -10,7 +10,8 @@ import {
   buildWorkbenchInstructionTokenCorpus,
   type InstructionTokenSource,
 } from "../lib/workbench/commands/instruction-token-corpus";
-import Gpt5TextTokens from "../lib/workbench/commands/gpt-5-text-tokens";
+import type { Gpt5TokenMeasure } from "../lib/workbench/commands/gpt-5-text-tokens";
+import { Gpt5TokenDeadlineError, measureGpt5Tokens } from "../lib/workbench/commands/gpt-5-token-measure";
 import { WorkbenchTokenCountExecutionRequestSchema } from "../lib/workbench/commands/token-command-definition";
 import type { WorkbenchHarness } from "workbench-shared/types";
 
@@ -34,20 +35,25 @@ function boundedErrorMessage(error: unknown) {
     .slice(0, 1000);
 }
 
-function tokenCountLabel(count: number) {
-  return `${count} token${count === 1 ? "" : "s"}`;
+/** A count that had to split long unbroken runs says so. */
+function tokenCount({ estimated, tokens }: Gpt5TokenMeasure) {
+  return `${estimated ? "about " : ""}${tokens}`;
 }
 
-function formatSourceBreakdown(sources: readonly InstructionTokenSource[]) {
+function tokenCountLabel(measure: Gpt5TokenMeasure) {
+  return `${tokenCount(measure)} token${measure.tokens === 1 ? "" : "s"}`;
+}
+
+async function formatSourceBreakdown(sources: readonly InstructionTokenSource[], signal: AbortSignal) {
   const lines = [
     "Source and section counts are independent; heading ranges include nested headings, active sources are listed once even when imports reuse them, and these counts do not sum to the reported total.",
   ];
+  const measures = await measureGpt5Tokens(sources.flatMap(source => [source.content, ...source.sections.map(section => section.content)]), { signal });
+  let next = 0;
   for (const source of sources) {
-    lines.push("", `${source.path}: ${tokenCountLabel(Gpt5TextTokens.count(source.content))}`);
+    lines.push("", `${source.path}: ${tokenCountLabel(measures[next++]!)}`);
     for (const section of source.sections) {
-      lines.push(
-        `  ${section.startLine}-${section.endLine} ${section.heading ?? "[preamble]"}: ${tokenCountLabel(Gpt5TextTokens.count(section.content))}`,
-      );
+      lines.push(`  ${section.startLine}-${section.endLine} ${section.heading ?? "[preamble]"}: ${tokenCountLabel(measures[next++]!)}`);
     }
   }
   return lines.join("\n");
@@ -65,6 +71,15 @@ export default class WorkbenchTokenCountController {
   }
 
   async execute(input: object, signal: AbortSignal) {
+    try {
+      return await this.count(input, signal);
+    } catch (error) {
+      if (error instanceof Gpt5TokenDeadlineError) return new Response(`${error.message}\n`, { status: 422 });
+      throw error;
+    }
+  }
+
+  private async count(input: object, signal: AbortSignal) {
     const parsed = WorkbenchTokenCountExecutionRequestSchema.safeParse(input);
     if (!parsed.success) return new Response("A valid token count request is required.\n", { status: 400 });
     if (
@@ -77,7 +92,8 @@ export default class WorkbenchTokenCountController {
     if (signal.aborted) throw signal.reason;
 
     if (parsed.data.kind === "text") {
-      return new Response(`${Gpt5TextTokens.count(parsed.data.text)} tokens for ${parsed.data.model}\n`);
+      const [measure] = await measureGpt5Tokens([parsed.data.text], { signal });
+      return new Response(`${tokenCount(measure!)} tokens for ${parsed.data.model}\n`);
     }
 
     if (parsed.data.kind === "skill") {
@@ -86,7 +102,8 @@ export default class WorkbenchTokenCountController {
       if (!response.ok) return response;
       const body = await response.text();
       signal.throwIfAborted();
-      return new Response(`${Gpt5TextTokens.count(body)} tokens for skill ${parsed.data.name} using ${parsed.data.model}\n`);
+      const [measure] = await measureGpt5Tokens([body], { signal });
+      return new Response(`${tokenCount(measure!)} tokens for skill ${parsed.data.name} using ${parsed.data.model}\n`);
     }
 
     if (parsed.data.kind === "instructions") {
@@ -95,14 +112,15 @@ export default class WorkbenchTokenCountController {
           path.join(this.projectRoot, "instructions"),
         );
         if (signal.aborted) throw signal.reason;
-        const count = Gpt5TextTokens.count(corpus.content);
+        const [measure] = await measureGpt5Tokens([corpus.content], { signal });
         const suffix = ` across ${corpus.files.length} instruction source${corpus.files.length === 1 ? "" : "s"}`;
-        const summary = `${count} tokens${suffix} for ${parsed.data.model}`;
+        const summary = `${tokenCount(measure!)} tokens${suffix} for ${parsed.data.model}`;
         return new Response(parsed.data.toc
-          ? `${summary}\n\n${formatSourceBreakdown(corpus.sources)}\n`
+          ? `${summary}\n\n${await formatSourceBreakdown(corpus.sources, signal)}\n`
           : `${summary}\n`);
       } catch (error) {
         if (signal.aborted) throw signal.reason;
+        if (error instanceof Gpt5TokenDeadlineError) throw error;
         return new Response("Workbench instruction sources could not be read for token counting.\n", { status: 500 });
       }
     }
@@ -125,12 +143,14 @@ export default class WorkbenchTokenCountController {
         roots: [{ rootPath: project.root.root }],
       });
       if (signal.aborted) throw signal.reason;
-      const summary = `${Gpt5TextTokens.count(corpus.content)} tokens across the resolved project AGENTS chain for ${parsed.data.model}`;
+      const [measure] = await measureGpt5Tokens([corpus.content], { signal });
+      const summary = `${tokenCount(measure!)} tokens across the resolved project AGENTS chain for ${parsed.data.model}`;
       return new Response(parsed.data.toc
-        ? `${summary}\n\n${formatSourceBreakdown(corpus.sources)}\n`
+        ? `${summary}\n\n${await formatSourceBreakdown(corpus.sources, signal)}\n`
         : `${summary}\n`);
     } catch (error) {
       if (signal.aborted) throw signal.reason;
+      if (error instanceof Gpt5TokenDeadlineError) throw error;
       return new Response(
         `Project instructions could not be read for token counting: ${boundedErrorMessage(error)}\n`,
         { status: 500 },

@@ -137,6 +137,8 @@ export interface WorkbenchAgentCommandDefinition {
   helpGroups: readonly string[];
   inputSchema: z.ZodType;
   mcpCodeModeEligible?: boolean;
+  /** Its output never spills: the text is the point, or the tool budgets its own pages close to the limit. */
+  mcpFullOutput?: true;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
   /** The user may stop a running call from its transcript row, as they can a running shell. */
@@ -161,6 +163,7 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   helpGroups: readonly string[];
   inputSchema: TSchema;
   mcpCodeModeEligible?: boolean;
+  mcpFullOutput?: true;
   mcpRuntimeDrainPolicy?: WorkbenchAgentMcpRuntimeDrainPolicy;
   mcpSteerInterruptible?: boolean;
   mcpUserStoppable?: boolean;
@@ -203,6 +206,7 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     helpGroups: definition.helpGroups,
     inputSchema: definition.inputSchema,
     mcpCodeModeEligible: definition.mcpCodeModeEligible,
+    mcpFullOutput: definition.mcpFullOutput,
     mcpRuntimeDrainPolicy: definition.mcpRuntimeDrainPolicy,
     mcpSteerInterruptible: definition.mcpSteerInterruptible,
     mcpUserStoppable: definition.mcpUserStoppable,

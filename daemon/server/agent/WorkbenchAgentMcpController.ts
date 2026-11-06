@@ -17,7 +17,8 @@ import {
 import { ErrorCode, McpError, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 
 import { z } from "zod";
-import { WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
+import { readWorkbenchDeferredCall, WORKBENCH_MCP_SERVER_NAME } from "workbench-shared/workbench/mcp/mcp-server-settings";
+import { spillToolResult } from "./workbench-tool-output-spill";
 import {
   BATCH_TURN_INTERRUPTION_TEXT, QUEUED_SHELL_STEER_INTERRUPTION_TEXT, SKIPPED_AFTER_FAILURE_TEXT,
 } from "workbench-shared/workbench/thread/tool-batch-turn-results";
@@ -122,6 +123,8 @@ export interface WorkbenchAgentMcpControllerOptions {
   readModeToolDenial?: (threadId: string, toolName: string, input?: unknown) => Promise<string | null>;
   /** Saves a Workbench tool's result for the thread, for `mcp_call` with `keep` on server `wb`. */
   keepToolResult?: (threadId: string, input: { keep: string; keepOnly?: boolean | undefined }, result: CallToolResult) => Promise<CallToolResult>;
+  /** Saves the full text of an oversized tool result to a file the thread owns. */
+  spillToolOutput?: (threadId: string, text: string) => Promise<{ path: string }>;
   /** Live local capability settings; capability-gated deferred tools are found and run only while enabled. */
   readLocalCapabilities?: () => Promise<WorkbenchLocalCapabilitySettings>;
   /** Whether the caller works at the Workbench repository root, the only audience of root-only commands. */
@@ -271,6 +274,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
   private readonly readLocalCapabilities: NonNullable<WorkbenchAgentMcpControllerOptions["readLocalCapabilities"]>;
   private readonly readModeToolDenial: NonNullable<WorkbenchAgentMcpControllerOptions["readModeToolDenial"]>;
   private readonly keepToolResult: NonNullable<WorkbenchAgentMcpControllerOptions["keepToolResult"]>;
+  private readonly spillToolOutput: NonNullable<WorkbenchAgentMcpControllerOptions["spillToolOutput"]>;
   private readonly createWaitDeadline: NonNullable<WorkbenchAgentMcpControllerOptions["createWaitDeadline"]>;
 
   constructor({
@@ -289,10 +293,12 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     readLocalCapabilities = async () => DEFAULT_WORKBENCH_LOCAL_CAPABILITY_SETTINGS,
     readModeToolDenial = async () => null,
     keepToolResult = async () => { throw new Error("Kept results are not available here."); },
+    spillToolOutput = async () => { throw new Error("Saved output is not available here."); },
     createWaitDeadline = createWorkbenchMcpWaitDeadline,
   }: WorkbenchAgentMcpControllerOptions) {
     this.readModeToolDenial = readModeToolDenial;
     this.keepToolResult = keepToolResult;
+    this.spillToolOutput = spillToolOutput;
     this.createWaitDeadline = createWaitDeadline;
     this.injectedExecuteCommand = executeCommand;
     this.executeCommand = executeCommand ?? (async (request, signal) => await requestRegistry.executeCommand(request, signal));
@@ -451,14 +457,27 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
 
   async call(scope: WorkbenchMcpScope, call: WorkbenchMcpToolCall): Promise<WorkbenchMcpToolStep> {
     const step = await this.step(scope, call);
-    return step.kind === "result" ? { ...step, result: await this.wireResult(scope, call.name, step.result) } : step;
+    if (step.kind !== "result") return step;
+    const toolName = readWorkbenchDeferredCall(call.name, call.arguments)?.tool ?? call.name;
+    const threadId = async () => (await this.tools(scope.provider).caller(
+      ProviderToolMetadataSchema.parse(call.meta ?? {}), call.signal, { clientScope: scope.clientScope },
+    )).threadId;
+    return { ...step, result: await this.wireResult(scope, toolName, step.result, threadId, call.signal) };
   }
 
   /**
-   * Providers whose model reads structured content instead of text get only the text, which carries every agent-facing
-   * line; transcripts already recorded both. The shell declares an output schema, so its structured result stays.
+   * What the model receives, after the transcript recorded the whole result. Oversized results spill, unless the tool's text is the
+   * point. Providers whose model reads structured content instead of text get only the text, which carries every agent-facing line;
+   * the shell declares an output schema, so its structured result stays.
    */
-  private async wireResult(scope: WorkbenchMcpScope, toolName: string, result: CallToolResult): Promise<CallToolResult> {
+  private async wireResult(
+    scope: WorkbenchMcpScope, toolName: string, whole: CallToolResult, threadId: () => Promise<string>, signal: AbortSignal,
+  ): Promise<CallToolResult> {
+    const fullOutput = this.listCommands().some(candidate => candidate.mcpFullOutput && getWorkbenchAgentCommandToolName(candidate) === toolName);
+    const result = fullOutput ? whole : await spillToolResult(whole, {
+      save: async text => await this.spillToolOutput(await threadId(), text),
+      signal,
+    });
     if (toolName === WORKBENCH_SHELL_MCP_TOOL_NAME || result.structuredContent === undefined) return result;
     if (!(await this.tools(scope.provider).describe()).modelReadsStructuredContent) return result;
     const { structuredContent: _transcriptOnly, ...text } = result;
@@ -678,8 +697,13 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       ...(call.collect?.command ? { command: call.collect.command } : {}),
     };
     const recorded = Object.keys(rowFacts).length ? { ...result, structuredContent: { ...result.structuredContent, ...rowFacts } } : result;
-    const finished = await this.finishTranscript(tools, call.transcript as WorkbenchToolTranscriptReference | null, recorded, result);
-    return call.shell ? finished : await this.wireResult(scope, call.toolName, finished);
+    const reference = call.transcript as WorkbenchToolTranscriptReference | null;
+    const finished = await this.finishTranscript(tools, reference, recorded, result);
+    const threadId = async () => {
+      if (!reference) throw new Error("This call has no thread to save output for.");
+      return reference.threadId;
+    };
+    return await this.wireResult(scope, call.toolName, finished, threadId, call.signal);
   }
 
   /** The row stays running; only the call answers, with the output so far and the id `shell_wait` collects. */

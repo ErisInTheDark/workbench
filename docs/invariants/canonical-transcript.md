@@ -4,6 +4,7 @@
 - Store every permanent visible thread item as one row in `thread_items`.
 - Held steers live outside `thread_items`. A steer enters the transcript only at delivery, as a new item at the delivery point.
 - Bound oversized text in admitted items before settlement; keep head, tail and an omission marker.
+- Transcripts record tool results up to the item bound. Only the model-facing result spills: over the limit it keeps head, tail and the path of the full text, and a failed save never fails the call.
 - Use turn indexes to order turns.
 - Use item positions to order items within one turn.
 - Workbench owns transcript order. Provider reconciliation may admit missing items or merge proven same-fact identities, never reorder admitted items or infer Workbench-owned identity from snapshot position.
