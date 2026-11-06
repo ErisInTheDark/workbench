@@ -266,6 +266,7 @@ function operations(
           active: async () => ({}),
           get: async () => session,
           inbox: { list: async () => [] },
+          switchModel: async () => undefined,
           ...value.session,
         },
       } as never;
@@ -702,6 +703,96 @@ test("managed prompt refresh receives the canonical subagent name rather than na
     input: [{ type: "text", text: "work", text_elements: [] }],
   });
   assert.deepEqual(names, ["mira"]);
+});
+
+function profiledOperations(options: { sessionModel?: object; effort: string | null; model?: string | null }) {
+  const calls: Array<{ method: string; model?: object }> = [];
+  const pending = Promise.withResolvers<object>();
+  const owner = operations({
+    session: {
+      create: async (input: { model?: object }) => {
+        calls.push({ method: "create", model: input.model });
+        return { ...session, id: "created-session" };
+      },
+      get: async () => ({ ...session, model: options.sessionModel }),
+      prompt: async () => {
+        calls.push({ method: "prompt" });
+        return await pending.promise;
+      },
+      switchModel: async (input: { model: object }) => { calls.push({ method: "switchModel", model: input.model }); },
+    },
+  }, {
+    record: async () => ({ threadId, latestTurnId: turnId }),
+    recordSteer: async () => undefined,
+  }, {
+    controller: {
+      getCanonicalThreadEntry: async () => ({
+        entryKind: "thread",
+        profile: { settings: { harness: "opencode", model: options.model === undefined ? "go/flash" : options.model, reasoningEffort: options.effort, agentPath: null } },
+      }),
+      recordAcceptedSelection: async () => undefined,
+    },
+  }, { readPage: async () => ({ thread: { turns: [] } }) });
+  Object.assign(owner, { read: async () => ({ turns: [{ id: turnId, items: [], status: "inProgress" }] }) });
+  const submit = async (intent: "newTurn" | "continue") => await owner.submit({
+    threadId, clientMessageId: "00000000-0000-4000-8000-000000000011", intent,
+    input: [{ type: "text", text: "work", text_elements: [] }],
+  });
+  return { calls, owner, submit };
+}
+
+test("a new turn moves the session onto its profile's model and effort before prompting", async () => {
+  const { calls, submit } = profiledOperations({ sessionModel: { providerID: "go", id: "flash" }, effort: "low" });
+  await submit("newTurn");
+  assert.deepEqual(calls, [
+    { method: "switchModel", model: { providerID: "go", id: "flash", variant: "low" } },
+    { method: "prompt" },
+  ]);
+});
+
+test("a new turn already on its profile's model and effort switches nothing", async () => {
+  for (const [sessionModel, effort] of [
+    [{ providerID: "go", id: "flash", variant: "low" }, "low"],
+    [{ providerID: "go", id: "flash" }, null],
+    [{ providerID: "go", id: "flash", variant: "default" }, null],
+  ] as const) {
+    const { calls, submit } = profiledOperations({ sessionModel, effort });
+    await submit("newTurn");
+    assert.deepEqual(calls, [{ method: "prompt" }]);
+  }
+});
+
+test("a profile with no model leaves the session's choice alone", async () => {
+  const { calls, submit } = profiledOperations({ sessionModel: { providerID: "go", id: "flash", variant: "low" }, effort: "high", model: null });
+  await submit("newTurn");
+  assert.deepEqual(calls, [{ method: "prompt" }]);
+});
+
+test("a steer keeps the running turn's model and effort", async () => {
+  const { calls, submit } = profiledOperations({ sessionModel: { providerID: "go", id: "flash" }, effort: "low" });
+  await submit("newTurn");
+  calls.length = 0;
+  void submit("continue");
+  await new Promise(setImmediate);
+  assert.deepEqual(calls, [{ method: "prompt" }]);
+});
+
+test("a rollover's replacement session keeps the profile's effort", async () => {
+  const { calls, owner, submit } = profiledOperations({ sessionModel: { providerID: "go", id: "flash", variant: "low" }, effort: "low" });
+  await submit("newTurn");
+  await owner.contextRollover.replace({ summary: "handoff", threadId, turnId }).catch(() => undefined);
+  assert.deepEqual(calls.find(call => call.method === "create")?.model, { providerID: "go", id: "flash", variant: "low" });
+});
+
+test("a created session starts on its profile's effort", async () => {
+  const { calls, owner } = profiledOperations({ effort: "high" });
+  await owner.create({
+    cwd: "C:/repo",
+    profile: { kind: "profile", profileId: "profile", settings: { agentPath: null, agentSource: null, harness: "opencode", model: "go/flash", reasoningEffort: "high", serviceTier: null } },
+    projectRoots: ["C:/repo"],
+    projectLocation: { id: ProjectIdSchema.parse("00000000-0000-4000-8000-000000000003"), rootPath: "C:/repo", launchId: "84f3661a-1ba2-4191-8118-851255a5f1de" },
+  });
+  assert.deepEqual(calls, [{ method: "create", model: { providerID: "go", id: "flash", variant: "high" } }]);
 });
 
 const unfinished: WorkbenchThreadLifecycle = { kind: "needsAttention", reason: "noActiveTurn", settled: false };

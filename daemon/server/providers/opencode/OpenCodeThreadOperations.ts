@@ -115,9 +115,19 @@ export interface OpenCodeNativeActivity {
   maintenance: boolean;
 }
 
-function modelRef(model: string) {
+function modelRef(model: string, effort: string | null | undefined) {
   const separator = model.indexOf("/");
-  return separator > 0 ? { providerID: model.slice(0, separator), id: model.slice(separator + 1) } : undefined;
+  return separator > 0
+    ? { providerID: model.slice(0, separator), id: model.slice(separator + 1), ...(effort ? { variant: effort } : {}) }
+    : undefined;
+}
+
+function sameModelRef(
+  left: { providerID: string; id: string; variant?: string },
+  right: { providerID: string; id: string; variant?: string } | undefined,
+) {
+  return left.providerID === right?.providerID && left.id === right.id
+    && (left.variant ?? "default") === (right.variant ?? "default");
 }
 
 function prompt(input: readonly WorkbenchUserInput[]) {
@@ -263,7 +273,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
       const settings = entry.profile?.settings;
       const session = await client.session.create({
         location: { directory: oldSession.location.directory },
-        ...(settings?.model ? { model: modelRef(settings.model) } : {}),
+        ...(settings?.model ? { model: modelRef(settings.model, settings.reasoningEffort) } : {}),
         ...this.options.managed.creation(),
       });
       this.sessions.set(session.id, session);
@@ -405,7 +415,7 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
     const settings = input.profile.settings;
     const session = await client.session.create({
       location: { directory: input.cwd },
-      ...(settings.model ? { model: modelRef(settings.model) } : {}),
+      ...(settings.model ? { model: modelRef(settings.model, settings.reasoningEffort) } : {}),
       ...this.options.managed.creation(),
     });
     this.sessions.set(session.id, session);
@@ -583,6 +593,12 @@ export default class OpenCodeThreadOperations implements WorkbenchProviderThread
           turnId: admittedSteer.turnId,
         });
         return { kind: "steered", turnId: admittedSteer.turnId };
+      }
+      const selected = settings?.model ? modelRef(settings.model, settings.reasoningEffort) : undefined;
+      if (selected && !sameModelRef(selected, session.model)) {
+        await client.session.switchModel({ sessionID: binding.nativeThreadId, model: selected }, { signal: this.options.signal });
+        session = { ...session, model: selected };
+        this.sessions.set(binding.nativeThreadId, session);
       }
       const message: SessionMessageUser = {
         id: messageId,
