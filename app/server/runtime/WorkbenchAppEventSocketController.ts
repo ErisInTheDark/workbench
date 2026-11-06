@@ -28,11 +28,9 @@ import type WorkbenchDaemonSources from "../workspace/WorkbenchDaemonSources";
 import type WorkbenchGitPeerSync from "../workspace/WorkbenchGitPeerSync";
 import type { VoiceSessionEvent } from "workbench-shared/workbench/voice/voice-session-contract";
 import type { WorkbenchAppNetworkEvent } from "workbench-shared/http/workbench-app-events";
-import { WorkbenchDaemonRequestError } from "workbench-shared/workbench/daemon/WorkbenchDaemonClient";
 import { z } from "zod";
 import { WorkbenchRpcRequestInterruptedError } from "workbench-shared/workbench/WorkbenchRpcSocketClient";
 import { WorkbenchRpcCancelSchema, WorkbenchRpcInflight } from "workbench-shared/workbench/rpc-cancellation";
-import { WORKSPACE_COMMAND_NOT_SENT, WORKSPACE_COMMAND_UNCERTAIN } from "workbench-shared/workbench/workspace/workspace-commands";
 import { WORKBENCH_RELOAD_METHOD } from "workbench-shared/workbench/daemon-reload";
 import { workbenchNetworkActionKeepsAppConnection } from "workbench-shared/http/workbench-network";
 import type WorkbenchNetworkController from "../network/WorkbenchNetworkController.ts";
@@ -40,6 +38,7 @@ import type WorkbenchNetworkRoutes from "../network/WorkbenchNetworkRoutes.ts";
 import type WorkbenchPresentationController from "../state/WorkbenchPresentationController.ts";
 import type WorkbenchPresentationImportController from "../state/WorkbenchPresentationImportController.ts";
 import type WorkbenchBrowserStateRegistry from "../state/WorkbenchBrowserStateRegistry.ts";
+import { readAppRpcFailure } from "./app-rpc-failure.ts";
 import type WorkbenchAppSettingsController from "./WorkbenchAppSettingsController.ts";
 import type WorkbenchAppPortRoutes from "./WorkbenchAppPortRoutes.ts";
 import type WorkbenchAppReloadOrchestrator from "./WorkbenchAppReloadOrchestrator";
@@ -447,12 +446,7 @@ export default class WorkbenchAppEventSocketController {
         const message = error instanceof Error ? boundedSocketError(error) : "Unknown app request failure.";
         // The browser asked for this; it is not a failure worth logging.
         if (!cancelled) this.options.logger.error("app", `WS app RPC ${input.method} failed: ${message}`);
-        const data = error instanceof WorkbenchDaemonRequestError ? z.json().safeParse(error.data) : null;
-        const code = error instanceof WorkbenchRpcRequestInterruptedError
-          ? error.dispatched ? WORKSPACE_COMMAND_UNCERTAIN : WORKSPACE_COMMAND_NOT_SENT
-          : error instanceof WorkbenchDaemonRequestError ? error.code : -32000;
-        send({ id: input.id, error: { code, message,
-          ...(data?.success ? { data: data.data } : {}) } }, input.method);
+        send({ id: input.id, error: { ...readAppRpcFailure(error), message } }, input.method);
       });
       this.pendingRequests.add(operation);
       void operation.then(() => { this.pendingRequests.delete(operation); });

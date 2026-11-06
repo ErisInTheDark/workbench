@@ -46,6 +46,11 @@ export class WorkbenchDaemonRequestError extends Error {
     super(message);
     this.name = "WorkbenchDaemonRequestError";
   }
+
+  /** By name: a scoped reload leaves other nodes holding a different copy of this class. */
+  static is(error: unknown): error is WorkbenchDaemonRequestError {
+    return error instanceof Error && error.name === "WorkbenchDaemonRequestError";
+  }
 }
 
 class WorkbenchDaemonClient {

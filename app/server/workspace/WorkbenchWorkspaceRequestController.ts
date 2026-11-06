@@ -531,7 +531,7 @@ export default class WorkbenchWorkspaceRequestController {
       }));
     try { return await source.request<Json>(method, { ...params, sessionId: upstreamId }); }
     catch (error) {
-      if (!(error instanceof WorkbenchRpcRequestInterruptedError) || !error.dispatched) this.releaseVoice(start.sessionId);
+      if (!WorkbenchRpcRequestInterruptedError.is(error) || !error.dispatched) this.releaseVoice(start.sessionId);
       throw error;
     }
   }
@@ -718,7 +718,7 @@ export default class WorkbenchWorkspaceRequestController {
     for (const interest of this.interests.values()) this.retire(interest);
     for (const [sessionId, session] of this.voice) {
       void session.source.daemon.voice.cancel(session.upstreamId).catch(error => {
-        if (!(error instanceof WorkbenchRpcRequestInterruptedError)) this.options.warn(`Voice cleanup failed: ${this.failure(error)}`);
+        if (!WorkbenchRpcRequestInterruptedError.is(error)) this.options.warn(`Voice cleanup failed: ${this.failure(error)}`);
       }).finally(() => this.releaseVoice(sessionId));
     }
     this.pendingRefresh.clear();

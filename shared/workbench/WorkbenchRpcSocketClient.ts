@@ -23,6 +23,11 @@ export class WorkbenchRpcRequestInterruptedError extends Error {
     super(message);
     this.name = "WorkbenchRpcRequestInterruptedError";
   }
+
+  /** By name: a scoped reload leaves other nodes holding a different copy of this class. */
+  static is(error: unknown): error is WorkbenchRpcRequestInterruptedError {
+    return error instanceof Error && error.name === "WorkbenchRpcRequestInterruptedError";
+  }
 }
 
 function boundedFailure(error: unknown) {
