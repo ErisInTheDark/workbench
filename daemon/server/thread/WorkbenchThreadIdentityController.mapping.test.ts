@@ -1,9 +1,9 @@
-/* No production exports. Protect durable identity admission, observations and shared publication. */
 /*
- * No exports. Tests protect canonical references, durable alias convergence, projection timing and body-free live projection.
+ * No exports. Protect canonical references, alias convergence, projection timing, live projection and Git owner mapping.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { test } from "node:test";
 import { captureTestOutput } from "../../../test/capture-test-output.mts";
 import Database from "better-sqlite3";
@@ -56,7 +56,7 @@ const fixtureIdentityValues = {
   },
 };
 
-async function setup(platform: NodeJS.Platform = process.platform) {
+async function setup(platform: NodeJS.Platform = process.platform, nativeLocation = "C:/repo") {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
   installWorkbenchDatabaseSchema(database);
@@ -80,14 +80,14 @@ async function setup(platform: NodeJS.Platform = process.platform) {
     },
     resolveTranscriptItemIdentity: async () => { throw new Error("Unexpected projection database read"); },
   });
-  const native = { harness: "codex", nativeLocation: "C:/repo", nativeThreadId: NativeThreadIdSchema.parse("native-parent"), nativeTurnId: NativeTurnIdSchema.parse("native-turn") };
+  const native = { harness: "codex", nativeLocation, nativeThreadId: NativeThreadIdSchema.parse("native-parent"), nativeTurnId: NativeTurnIdSchema.parse("native-turn") };
   const parent = await threads.observe({
-    native, projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "C:/repo", title: "Parent",
+    native, projectId: fixtureIdentityValues.ProjectId.project, projectRoot: nativeLocation, title: "Parent",
     createdAt: 1, updatedAt: 1, activityAt: 1,
   });
   const child = await threads.observe({
     native: { ...native, nativeThreadId: NativeThreadIdSchema.parse("native-child") },
-    projectId: fixtureIdentityValues.ProjectId.project, projectRoot: "C:/repo", title: "Child",
+    projectId: fixtureIdentityValues.ProjectId.project, projectRoot: nativeLocation, title: "Child",
     createdAt: 1, updatedAt: 1, activityAt: 1,
   });
   const turn = await threads.observeTurn({
@@ -99,7 +99,7 @@ async function setup(platform: NodeJS.Platform = process.platform) {
 }
 
 test("Git arc mutations and state callbacks share the canonical Workbench owner", async () => {
-  const { database, owners, native, parent } = await setup();
+  const { database, owners, native, parent } = await setup(process.platform, path.resolve("identity-fixture"));
   const contexts: string[] = [];
   const refreshed: string[] = [];
   const registryOwners: string[] = [];

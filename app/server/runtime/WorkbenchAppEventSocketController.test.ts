@@ -69,12 +69,16 @@ test("connected devices can admit reload and update operations without app-manag
 test("an idle app socket closes on grant revocation and state mutations cannot switch browser identity", async context => {
   let granted = true;
   const listeners = new Set<() => void>();
+  const disconnected = Promise.withResolvers<void>();
   const lines: string[] = [];
   const network = {
     ingress: () => granted ? { deviceNodeId: null, manageApp: true, manageNetwork: true, trustHost: false } : null,
     discovery: () => ({ refreshing: false, peers: [] }),
     getFacts: () => ({ phase: "pending" as const, failure: null, snapshot: null }),
-    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => {
+      listeners.delete(listener);
+      if (!listeners.size) disconnected.resolve();
+    }; },
     action: async () => ({ kind: "ok" as const }),
   };
   const routes = new WorkbenchNetworkRoutes(network);
@@ -130,6 +134,7 @@ test("an idle app socket closes on grant revocation and state mutations cannot s
   granted = false;
   for (const listener of [...listeners]) listener();
   await closed;
+  await disconnected.promise;
   assert.equal(listeners.size, 0);
   granted = true;
   const replacement = await connect();
