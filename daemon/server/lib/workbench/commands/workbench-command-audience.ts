@@ -62,9 +62,14 @@ export async function refuseWorkbenchCommandCaller(
   return refuseWorkbenchCommand(definition, { ...caller, subagent: false, capabilities: await readCapabilities() });
 }
 
+const PARENT_ONLY_RECOVERY: Readonly<Record<string, string>> = {
+  git_arc_propose: "git_arc_propose is unavailable to child threads. Keep claims and report changes to the parent; the parent lands them.",
+};
+
 const REFUSAL_TEXT: Record<WorkbenchCommandRefusal, (toolName: string, harness: string) => string> = {
   harness: (toolName, harness) => `${toolName} is not available to ${harness} agents.`,
-  parentOnly: toolName => `${toolName} belongs to the parent thread; subagents leave claims for parent adoption and report to the parent.`,
+  parentOnly: toolName => PARENT_ONLY_RECOVERY[toolName]
+    ?? `${toolName} belongs to the parent thread; subagents leave claims for parent adoption and report to the parent.`,
   rootOnly: toolName => `${toolName} is available only to threads at the Workbench repository root.`,
   capability: toolName => `${toolName} is turned off in Workbench Settings; ask the user to enable it.`,
 };

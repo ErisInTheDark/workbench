@@ -10,7 +10,7 @@ Review follows completion gate: summarize/propose. No inspection, implementation
 - Use <tool id="git_arc_propose" />, not commit-selection tools, for changed claims. Skip unchanged; failure keeps Review open.
 </docs>
 <else>
-- Report changes and validation to parent; keep claims for adoption.
+- Children cannot propose. Report changes and validation to parent; keep claims for the parent.
 </else>
 </>
 - After proposal, unchanged review, or parent handoff, send <>

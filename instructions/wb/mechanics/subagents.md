@@ -45,6 +45,19 @@ Pass every active child in one wait call. Treat it as a Workbench Long Wait. Do 
 DO NOT USE <tool id="message_wait" /> TO WAIT FOR SUBAGENTS; IT MISSES SUBAGENT EVENTS.
 </docs>
 
+<docs tools="subagent_create subagent_promote message_agent">
+### cross subagents
+
+Cross subagent: child created with `folder` in another project, folder or daemon. Handover cannot reach it, so its work lands through a promoted peer:
+
+1. Create with `folder`; coordinate as usual: brief, approve, verify.
+2. When its work is verified, <tool id="subagent_promote" />; it now belongs to the user.
+3. <tool id="message_agent" /> its `threadId` once as a peer: hand over remaining claims and context, suggesting proposal split and titles. It reports to the user in its own thread.
+4. Do not wait on it, direct it, or relay its proposals or results to the user; the user already sees them. Message it again only for genuine coordination.
+
+Never use this recipe for same-folder children; settle with `handover: true` and propose yourself.
+</docs>
+
 ### notes
 
 <docs tools="subagent_create">

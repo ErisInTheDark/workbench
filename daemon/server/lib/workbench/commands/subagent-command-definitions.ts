@@ -201,7 +201,7 @@ const settle = defineWorkbenchAgentCommand({
 });
 
 const promote = defineWorkbenchAgentCommand({
-  description: "Turn direct children into user-owned sidebar threads in their own projects, one way; you stop managing them and their names free up.",
+  description: "Turn direct children into user-owned sidebar threads in their own projects, one way; you stop managing them and their names free up; does not start turns or propose changes.",
   helpGroups: ["subagent"],
   words: ["subagent", "promote"],
   usage: "wb subagent promote (--id <id> | --name <name>) [...]",

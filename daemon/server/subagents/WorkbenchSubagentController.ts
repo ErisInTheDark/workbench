@@ -728,7 +728,7 @@ export default class WorkbenchSubagentController {
         else if (this.promoteThread) await this.promoteThread(record.threadId);
         else throw new Error("promotion is unavailable in this runtime.");
         await this.subagentStore.remove(record.parentThreadId, record.threadId);
-        lines.push(`${record.name} is now a sidebar thread (${threadId}); you no longer manage it. Message it by thread id.`);
+        lines.push(`${record.name} is now a sidebar thread (${threadId}); you no longer manage it. Next: it now belongs to the user. If it holds unproposed claims, follow the cross subagents recipe: message this thread id once as a peer to hand over remaining work for scoped Git arc proposals.`);
       } catch (error) {
         lines.push(`${record.name} was not promoted: ${error instanceof Error ? error.message : String(error)}`);
       }
