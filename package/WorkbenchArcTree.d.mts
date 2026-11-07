@@ -9,14 +9,14 @@
 export interface WorkbenchArcTreeOptions {
   /** Directory whose repositories to view; relative reads resolve from it. Defaults to `process.cwd()`. */
   cwd?: string;
-  /** Hold the caller's own dirty claims back too, for a matched "before" build. */
+  /** Hold the caller's own dirty claims back too: its top sealed layer apart from unclaimed dirt, for gates and matched "before" builds. */
   holdOwn?: boolean;
   /** Agent identity and data root come from here. Defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
   fetch?: typeof globalThis.fetch;
   /** Aborting stops the daemon request and Git reads, and rejects instead of falling back. */
   signal?: AbortSignal;
-  /** Fallback and dropped-entry notices. Silent by default. */
+  /** Fallback, dropped-entry and mixed-tree notices; passing it makes a load compare held bytes with disk unless holding own. Silent by default. */
   warn?: (message: string) => void;
 }
 

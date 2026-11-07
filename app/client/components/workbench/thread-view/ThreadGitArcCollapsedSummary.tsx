@@ -50,7 +50,7 @@ export function createThreadGitArcStatusCounts(facts: Partial<GitArcStatusPresen
   const stashedPaths = count(facts.stashedClaims);
   const lost = (facts.recovery ?? []).filter(entry => entry.kind !== "restored").reduce((total, entry) => total + count(entry.paths), 0);
   return [
-    { count: facts.stacked?.length ?? 0, icon: <GitArcStackIcon size={14} />, label: "stacked" },
+    { count: count(facts.stacked), icon: <GitArcStackIcon size={14} />, label: "stacked" },
     { count: facts.pending?.length ?? 0, icon: <GitArcProposalIcon size={14} />, label: "pending" },
     { count: facts.accepted?.length ?? 0, icon: <CheckCheckIcon size={14} />, label: "accepted" },
     { count: count(facts.dirtyClaims), icon: <ThreadClaimMarkerIcon marker="dirty" />, label: "dirty" },

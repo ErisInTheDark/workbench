@@ -9,6 +9,38 @@ import WorkbenchArcTree from "./WorkbenchArcTree.mjs";
 
 const base64 = (text: string) => Buffer.from(text).toString("base64");
 
+test("only held paths that differ from disk warn, capped per thread, and never under hold-own", async t => {
+  const temporary = await WorkbenchTemporaryDirectory.create("arc-tree-mixed-");
+  t.after(() => temporary.dispose());
+  const root = path.join(temporary.path, "repo");
+  const data = path.join(temporary.path, "data");
+  await fs.mkdir(root);
+  await publishDaemonEndpoint(path.join(data, "daemon/runtime.json"), {
+    version: 1, pid: 1, instanceId: "00000000-0000-4000-8000-000000000001", origin: "http://127.0.0.1:4500",
+  });
+  await fs.writeFile(path.join(root, "same.txt"), "same\n");
+  const moved = Array.from({ length: 7 }, (_, index) => `moved-${index}.txt`);
+  await Promise.all(moved.map(name => fs.writeFile(path.join(root, name), "live\n")));
+  const body = { repositories: [{
+    baseline: "a".repeat(40), head: null, repoRoot: root,
+    held: [{ paths: moved, threadId: "busy" }, { paths: ["same.txt"], threadId: "quiet" }],
+    contents: { ...Object.fromEntries(moved.map(name => [name, base64("baseline\n")])), "same.txt": base64("same\n") },
+  }] };
+  const load = async (options: { holdOwn?: boolean; warn?: (line: string) => void }) => await WorkbenchArcTree.load({
+    ...options, cwd: root, env: { WORKBENCH_DATA_ROOT: data, WORKBENCH_THREAD_ID: "caller" },
+    fetch: async () => Response.json(body),
+  });
+  const warnings: string[] = [];
+  await load({ warn: line => { warnings.push(line); } });
+  assert.equal(warnings.length, 1, warnings.join("\n"));
+  assert.match(warnings[0]!, /7 of 8 held paths differ from disk/u);
+  assert.match(warnings[0]!, /thread busy: 7 differ: moved-0\.txt, moved-1\.txt, moved-2\.txt, moved-3\.txt, moved-4\.txt \(\+2 more\)/u);
+  assert.doesNotMatch(warnings[0]!, /quiet|same\.txt/u, "holds matching disk mix nothing");
+  warnings.length = 0;
+  await load({ holdOwn: true, warn: line => { warnings.push(line); } });
+  assert.deepEqual(warnings, [], "a hold-own view is the tree the caller asked for");
+});
+
 test("held paths read the daemon's view bytes, and the filesystem shows through without one", async t => {
   const temporary = await WorkbenchTemporaryDirectory.create("arc-tree-load-");
   t.after(() => temporary.dispose());
@@ -49,6 +81,10 @@ test("held paths read the daemon's view bytes, and the filesystem shows through 
   await assert.rejects(arc.readFile("created.txt"), { code: "ENOENT" });
   assert.deepEqual(["changed.txt", "created.txt", "deleted.txt"].map(name => arc.exists(name)), [true, false, true]);
   assert.deepEqual(arc.deletedOnDisk, [path.join(root, "deleted.txt")], "Node children cannot see restored deletions");
+  assert.equal(warnings.length, 1, warnings.join("\n"));
+  assert.match(warnings[0]!, /3 of 3 held paths differ from disk/u);
+  assert.match(warnings[0]!, /thread other: 3 differ, 1 absent here: changed\.txt, created\.txt, deleted\.txt/u);
+  warnings.length = 0;
 
   const outside = await load({ WORKBENCH_DATA_ROOT: data });
   assert.equal(outside.source, "filesystem");
@@ -74,5 +110,5 @@ test("held paths read the daemon's view bytes, and the filesystem shows through 
   assert.equal(repaired.source, "arc", "one malformed entry never discards the whole view");
   assert.deepEqual([...repaired.files.keys()], [path.join(root, "changed.txt")]);
   assert.equal(await repaired.readFile("created.txt", "utf8"), "new\n", "paths without readable view bytes read from disk");
-  assert.match(warnings.at(-1)!, /dropped 5 malformed/u);
+  assert.ok(warnings.some(line => /dropped 5 malformed/u.test(line)), warnings.join("\n"));
 });

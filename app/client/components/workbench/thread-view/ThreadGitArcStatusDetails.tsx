@@ -27,7 +27,7 @@ export default function ThreadGitArcStatusDetails ({ incomplete = false, output,
     .map(({ proposalId, title }) => ({ committedSha: null, proposalId, title }));
   // Each kind of commit collapses into its own group, so long histories read as one line each.
   const commitGroups = [
-    ...(facts.stacked ?? []).map(({ pending, title }, index) => ({
+    ...(Array.isArray(facts.stacked) ? facts.stacked : []).map(({ pending, title }, index) => ({
       commits: pendingCommits(pending),
       count: plural(pending.length, "proposal"),
       icon: <GitArcStackIcon size={14} />,
@@ -63,6 +63,12 @@ export default function ThreadGitArcStatusDetails ({ incomplete = false, output,
   return (
     <div className="min-w-0 py-1">
       {incomplete || !Object.keys(facts).length ? <p className="text-fg/muted">Some status facts are unavailable.</p> : null}
+      {typeof facts.stacked === "number" ? (
+        <p className="m-0 flex items-center gap-1 py-1 text-fg/muted">
+          <span className="inline-flex shrink-0" aria-hidden="true"><GitArcStackIcon size={14} /></span>
+          <span>Stack layers: {facts.stacked}</span>
+        </p>
+      ) : null}
       {commitGroups.map(({ commits, count, icon, iconLabel, key, title }) => commits.length ? (
         <ThreadGitArcCommitGroup count={count} data-thread-git-arc-status-group={key} icon={icon} iconLabel={iconLabel} inline key={key} title={title}>
           {commits.map(({ committedSha, proposalId, title: commitTitle }) => (

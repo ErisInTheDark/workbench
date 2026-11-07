@@ -39,6 +39,22 @@ test("baseline guards are absent by default and round trip only when selected", 
   assert.deepEqual(projectGitArcStatus(input, ["baseline"]).baselineClaims, ["src/sealed.ts"]);
 });
 
+test("big stacks count layers unless selected, and small stacks still name their proposals", () => {
+  const layers = Array.from({ length: 6 }, (_, index) => ({
+    title: `layer, ${index}`, pending: [{ proposalId: `proposal-${index}`, title: "sealed, work" }],
+  }));
+  const big = { ...empty, stacked: layers };
+  const output = formatGitArcStatus(big);
+  assert.equal(output, "Stacked layers: 6");
+  assert.equal(parseGitArcStatus(output).data?.stacked, 6);
+  assert.equal(projectGitArcStatus(big).stacked, 6);
+  assert.deepEqual(parseGitArcStatus(formatGitArcStatus(big, ["layers"])).data?.stacked, layers);
+  assert.deepEqual(projectGitArcStatus(big, ["layers"]).stacked, layers);
+  const small = { ...empty, stacked: layers.slice(0, 5) };
+  assert.deepEqual(parseGitArcStatus(formatGitArcStatus(small)).data?.stacked, small.stacked);
+  assert.equal(parseGitArcStatus("Stacked layers: 6\nStacked layers: 7").success, false);
+});
+
 test("status round-trips proposal identities and recovery counts without section injection", () => {
   const input: GitArcStatus = {
     ...empty,

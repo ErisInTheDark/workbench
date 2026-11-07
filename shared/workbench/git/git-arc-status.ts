@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - GitArcStatusFullSchema/GitArcStatusFull: selectable expanded status groups, including baseline guards.
+ * - GitArcStatusFullSchema/GitArcStatusFull: selectable expanded status groups, including baseline guards and stack layers.
  * - GitArcClaimLossSchema/GitArcClaimLoss: exact persisted ownership-loss boundary metadata.
  * - GitArcStatusSchema/GitArcStatus: complete status facts shared by inspection and transport.
  * - GitArcStatusPresentationSchema/GitArcStatusPresentation/projectGitArcStatus: typed compact facts, preserving count-only groups.
@@ -13,7 +13,7 @@ const text = z.string().min(1);
 const sha = text.regex(/^[a-f0-9]{7,64}$/iu);
 const filePaths = z.array(text);
 const summary = z.union([filePaths, z.number().int().nonnegative()]);
-export const GitArcStatusFullSchema = z.enum(["dirty", "clean", "unclaimed-dirt", "baseline"]);
+export const GitArcStatusFullSchema = z.enum(["dirty", "clean", "unclaimed-dirt", "baseline", "layers"]);
 export type GitArcStatusFull = z.infer<typeof GitArcStatusFullSchema>;
 export const GitArcClaimLossSchema = z.object({
   version: z.literal(1),
@@ -35,11 +35,12 @@ const recovery = z.object({
   omittedCommits: z.number().int().nonnegative().default(0),
 }).strict();
 const proposalSummary = z.object({ proposalId: text, title: z.string() }).strict();
+const stackLayers = z.array(z.object({ title: text, pending: z.array(proposalSummary).min(1) }).strict());
 export const GitArcStatusSchema = z.object({
   /** Pending proposals outside any sealed stack layer. */
   pending: z.array(proposalSummary),
   /** Own sealed stack layers with pending proposals, bottom first; absent means none. */
-  stacked: z.array(z.object({ title: text, pending: z.array(proposalSummary).min(1) }).strict()).optional(),
+  stacked: stackLayers.optional(),
   accepted: z.array(z.object({ proposalId: text, title: z.string(), commitSha: sha }).strict()),
   /** Listed proposals that can no longer be committed, with why; absent means none. */
   unavailable: z.array(z.object({ proposalId: text, title: z.string(), reason: text }).strict()).optional(),
@@ -55,15 +56,19 @@ export const GitArcStatusSchema = z.object({
 export type GitArcStatus = z.infer<typeof GitArcStatusSchema>;
 export const GitArcStatusPresentationSchema = GitArcStatusSchema.extend({
   dirtyClaims: summary, cleanClaims: summary, baselineClaims: summary.optional(), stashedClaims: summary, unclaimedDirt: summary,
+  stacked: z.union([stackLayers, z.number().int().nonnegative()]).optional(),
   recovery: z.array(recovery.extend({ paths: summary })),
 });
 export type GitArcStatusPresentation = z.infer<typeof GitArcStatusPresentationSchema>;
 
+const COMPACT_LIMIT = 5;
+
 export function projectGitArcStatus(input: GitArcStatus, full: readonly GitArcStatusFull[] = []): GitArcStatusPresentation {
-  const compact = (paths: string[], selected = false) => !selected && paths.length > 5 ? paths.length : paths;
+  const compact = <Item>(items: Item[], selected = false) => !selected && items.length > COMPACT_LIMIT ? items.length : items;
   const { baselineClaims, ...status } = input;
   return GitArcStatusPresentationSchema.parse({
     ...status,
+    ...(input.stacked ? { stacked: compact(input.stacked, full.includes("layers")) } : {}),
     dirtyClaims: compact(input.dirtyClaims, full.includes("dirty")),
     cleanClaims: compact(input.cleanClaims, full.includes("clean")),
     ...(full.includes("baseline") && baselineClaims ? { baselineClaims: compact(baselineClaims, true) } : {}),
@@ -106,7 +111,7 @@ function splitList(value: string) {
   return result;
 }
 function summarize(paths: string[], full = false) {
-  return !full && paths.length > 5 ? String(paths.length) : paths.map(quote).join(", ");
+  return !full && paths.length > COMPACT_LIMIT ? String(paths.length) : paths.map(quote).join(", ");
 }
 function parseSummary(value: string) {
   return /^\d+$/u.test(value) ? Number(value) : splitList(value).map(unquote);
@@ -120,7 +125,9 @@ function readProposal(value: string) {
 export function formatGitArcStatus(input: GitArcStatus, full: readonly GitArcStatusFull[] = []) {
   const status = GitArcStatusSchema.parse(input);
   const lines: string[] = [];
-  for (const layer of status.stacked ?? []) {
+  const layers = status.stacked ?? [];
+  if (layers.length > COMPACT_LIMIT && !full.includes("layers")) lines.push(`Stacked layers: ${layers.length}`);
+  else for (const layer of layers) {
     lines.push(`Stacked layer: ${JSON.stringify(layer.title)} pending ${layer.pending.map(p => `${quote(p.proposalId)} ${quote(p.title)}`).join(", ")}`);
   }
   if (status.pending.length) lines.push(`Proposals pending: ${status.pending.map(p => `${quote(p.proposalId)} ${quote(p.title)}`).join(", ")}`);
@@ -187,17 +194,22 @@ export function parseGitArcStatus(output: string) {
         result.recovery.push(evidence);
         evidence = undefined;
       }
-      if (["Proposals pending", "Proposals accepted", "Proposals unavailable", "Dirty claims", "Clean claims", "Baseline claims", "Stashed claims", "Unclaimed dirt", "Claim-loss baseline unavailable", "Arc stashed"].includes(label)) {
+      if (["Stacked layers", "Proposals pending", "Proposals accepted", "Proposals unavailable", "Dirty claims", "Clean claims", "Baseline claims", "Stashed claims", "Unclaimed dirt", "Claim-loss baseline unavailable", "Arc stashed"].includes(label)) {
         if (seen.has(label)) throw new Error("Duplicate status group.");
         seen.add(label);
       }
       switch (label) {
         case "Stacked layer": {
           const match = /^("(?:[^"\\]|\\.)*") pending (.+)$/u.exec(value);
-          if (!match) throw new Error("Invalid stacked layer.");
-          (result.stacked ??= []).push({ title: unquote(match[1]!), pending: splitList(match[2]!).map(readProposal) });
+          const layers = result.stacked ?? [];
+          if (!match || typeof layers === "number") throw new Error("Invalid stacked layer.");
+          result.stacked = [...layers, { title: unquote(match[1]!), pending: splitList(match[2]!).map(readProposal) }];
           break;
         }
+        case "Stacked layers":
+          if (!/^\d+$/u.test(value) || result.stacked !== undefined) throw new Error("Invalid stacked layer count.");
+          result.stacked = Number(value);
+          break;
         case "Proposals pending": result.pending = splitList(value).map(readProposal); break;
         case "Proposals accepted":
           result.accepted = splitList(value).map(entry => {

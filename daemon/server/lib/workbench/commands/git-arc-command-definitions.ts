@@ -560,7 +560,7 @@ const status = defineWorkbenchAgentCommand({
   effects: { readOnly: true, idempotent: true },
   helpGroups: ["git-arc"],
   words: ["git", "arc", "status"],
-  usage: "wb git arc status [--thread <id>] [--full=dirty,clean,unclaimed-dirt,baseline]",
+  usage: "wb git arc status [--thread <id>] [--full=dirty,clean,unclaimed-dirt,baseline,layers]",
   inputSchema: z.object({
     full: z.array(GitArcStatusFullSchema).default([]).describe("Groups to expand; baseline also includes pending sealed-proposal guards."),
     threadId: requiredText.optional().describe("Workbench thread to inspect; omit for the caller."),
@@ -583,7 +583,7 @@ const status = defineWorkbenchAgentCommand({
 });
 
 const tree = defineWorkbenchAgentCommand({
-  description: "Print JSON with a Git tree of the worktree as the caller builds it: other live threads' claimed paths at HEAD plus the caller's own or inherited sealed layers. --hold-own holds the caller's back too. --into mirrors the view's paths (all when none) into a gitignored directory inside the repository, rewriting only changed files and removing files it previously mirrored that left the view; files it didn't write are never touched.",
+  description: "Print JSON with a Git tree of the worktree as the caller builds it: other live threads' claimed paths at HEAD plus the sealed layers the caller builds on. --hold-own holds the caller's back too, giving exactly the caller's top sealed layer apart from unclaimed dirt: the view for gates. --into mirrors the view's paths (all when none) into a gitignored directory inside the repository, rewriting only changed files and removing files it previously mirrored that left the view; files it didn't write are never touched.",
   effects: { idempotent: true },
   helpGroups: ["git-arc"],
   mcpDeferred: true,

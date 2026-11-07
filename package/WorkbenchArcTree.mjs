@@ -2,7 +2,7 @@
  * Exports:
  * - default WorkbenchArcTree: the worktree as the calling agent thread builds it (other threads' held paths at the
  *   caller's arc baseline, everything else from disk), with in-process reads and a Node child-process environment.
- *   Falls back to the plain filesystem outside agent threads or when the daemon view fails.
+ *   Warns when held bytes differ from disk. Falls back to the plain filesystem outside agent threads or when the daemon view fails.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -53,6 +53,43 @@ function conformRepositories(body, warn) {
   return { files, repositories };
 }
 
+const MIXED_SAMPLE_LIMIT = 5;
+const MIXED_READ_BATCH = 64;
+
+async function readDisk(target) {
+  try {
+    return await fs.promises.readFile(target);
+  } catch {
+    return null;
+  }
+}
+
+/** One notice naming held paths whose bytes differ from disk, or null when the build reads as one tree. */
+async function describeMixing(files, repositories, signal) {
+  const targets = [...files.keys()];
+  const differing = new Set();
+  for (let offset = 0; offset < targets.length; offset += MIXED_READ_BATCH) {
+    signal?.throwIfAborted();
+    await Promise.all(targets.slice(offset, offset + MIXED_READ_BATCH).map(async (target) => {
+      const held = files.get(target);
+      const disk = await readDisk(target);
+      if (held === null ? disk !== null : disk === null || !held.equals(disk)) differing.add(target);
+    }));
+  }
+  if (!differing.size) return null;
+  const threads = repositories.flatMap(({ root, held }) => held.flatMap(({ paths, threadId }) => {
+    const listed = paths.filter(relative => differing.has(path.resolve(root, relative)));
+    if (!listed.length) return [];
+    const absent = listed.filter(relative => files.get(path.resolve(root, relative)) === null).length;
+    const more = listed.length - MIXED_SAMPLE_LIMIT;
+    return [`  thread ${threadId.slice(0, 8)}: ${listed.length} differ${absent ? `, ${absent} absent here` : ""}: ${listed.slice(0, MIXED_SAMPLE_LIMIT).join(", ")}${more > 0 ? ` (+${more} more)` : ""}`];
+  }));
+  return [
+    `arc tree: ${differing.size} of ${files.size} held paths differ from disk, so this run mixes other threads' claims at your baseline with everything else from disk. holdOwn views only your sealed stack.`,
+    ...threads,
+  ].join("\n");
+}
+
 function missing(target) {
   return Object.assign(new Error(`ENOENT: no such file or directory, open '${target}'`), {
     code: "ENOENT", errno: -os.constants.errno.ENOENT, path: target, syscall: "open",
@@ -71,22 +108,29 @@ export default class WorkbenchArcTree {
     this.#held = new Map([...files].map(([target, content]) => [arcTreePathKey(target), content]));
   }
 
-  static async load({ cwd = process.cwd(), holdOwn = false, env = process.env, fetch, signal, warn = () => {} } = {}) {
+  static async load({ cwd = process.cwd(), holdOwn = false, env = process.env, fetch, signal, warn: notify } = {}) {
     const root = path.resolve(cwd);
+    const warn = notify ?? (() => {});
     signal?.throwIfAborted();
     if (!daemonGitArcIdentity(env)) return new WorkbenchArcTree("filesystem", root, new Map(), []);
+    let view;
     try {
-      const { files, repositories } = conformRepositories(
+      view = conformRepositories(
         await requestDaemonGitArc({ action: "arcHeld", contents: true, cwd: root, holdOwn }, { env, fetch, signal }),
         warn,
       );
-      if (!repositories.length) throw new Error(`no Workbench arc covers ${root}`);
-      return new WorkbenchArcTree("arc", root, files, repositories);
+      if (!view.repositories.length) throw new Error(`no Workbench arc covers ${root}`);
     } catch (error) {
       signal?.throwIfAborted();
       warn(`Workbench arc tree unavailable (${error instanceof Error ? error.message : String(error)}); reading the filesystem, including other threads' live edits.`);
       return new WorkbenchArcTree("filesystem", root, new Map(), []);
     }
+    const { files, repositories } = view;
+    if (notify && !holdOwn) {
+      const mixing = await describeMixing(files, repositories, signal);
+      if (mixing) notify(mixing);
+    }
+    return new WorkbenchArcTree("arc", root, files, repositories);
   }
 
   static fromFiles(cwd, files, repositories = []) {
