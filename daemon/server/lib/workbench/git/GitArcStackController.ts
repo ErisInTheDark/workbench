@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, rebases onto HEAD, arc drift, seal/reopen operations (sealing amendments as fresh commits) and checks that layer changes spare other threads' held work.
+ * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, a subagent's inherited tips, rebases onto HEAD, arc drift, seal/reopen operations (sealing amendments as fresh commits, moving following children) and checks that layer changes spare other threads' held work.
  * - GitArcPreparedStackRevision: atomic ref and commit updates for one chain rebase.
  * - GitArcStackLayer: one readable stack tip with its sealed layer facts.
  * - GitArcStackStatusResolver: derived proposal status supplied by the proposal owner.
@@ -152,6 +152,44 @@ export default class GitArcStackController {
     if (!entry?.stackTip) return null;
     const chain = await this.readChain(entry.stackTip);
     return chain.length && await this.chainHasPending(chain) ? chain.at(-1)!.tipCommit : null;
+  }
+
+  /**
+   * Whether a thread may sit on the stack ending at `chain`. Its own layers and pending proposals name their stack base,
+   * and saved work needs real HEAD, so those stay put; a layer it would newly sit on must not change a file it holds.
+   */
+  private async canFollow(entry: GitArcRegistryEntry, chain: readonly GitArcStackLayer[]) {
+    if (entry.savedStash || entry.phase === "stashed") return false;
+    // A fully landed stack is just history, so it never pins a thread beneath its parent's next one.
+    const current = await this.pendingTip(entry) ? await this.readChain(entry.stackTip) : [];
+    if (this.ownLayers(current, entry).length) return false;
+    const inherited = new Set(current.map(({ tipCommit }) => tipCommit));
+    if (current.some(({ tipCommit }) => !chain.some(layer => layer.tipCommit === tipCommit))) return false;
+    const held = new GitArcPathSet(getGitArcLiveClaimPaths(entry));
+    if (chain.some(({ scopePaths, tipCommit }) => !inherited.has(tipCommit) && scopePaths.some(scope => held.overlaps(scope)))) return false;
+    const owned = lifecycleProposalIds(entry);
+    if (!owned.length) return true;
+    const [summaries] = await this.store().readProposalSummaryGroups([{ harness: entry.harness as GitArcHarness, proposalIds: owned, threadId: entry.threadId }]);
+    return !(summaries ?? []).some(({ status }) => status === "proposed");
+  }
+
+  /** The pending tip a subagent builds on when it first plans, or null when it should keep its baseline. */
+  async parentStackTip(entry: GitArcRegistryEntry | null, parentThreadId: string | null | undefined) {
+    const parent = await this.findThread(parentThreadId);
+    const tip = await this.pendingTip(parent);
+    if (!tip) return null;
+    return !entry || await this.canFollow(entry, await this.readChain(tip)) ? tip : null;
+  }
+
+  /** A thread with no stack of its own reads as if on its parent's pending stack, which is where it will build. */
+  async viewTip(entry: GitArcRegistryEntry | undefined, parentThreadId: string | null | undefined) {
+    return await this.pendingTip(entry) ? null : await this.pendingTip(await this.findThread(parentThreadId));
+  }
+
+  private async findThread(threadId: string | null | undefined) {
+    if (!threadId) return null;
+    const normalized = normalizeThreadId(threadId);
+    return (await this.registry().list()).find(entry => normalizeThreadId(entry.threadId) === normalized) ?? null;
   }
 
   /** The own layer sealing a proposal, if any. */
@@ -359,7 +397,7 @@ export default class GitArcStackController {
    */
   async prepareStack(
     identity: StackIdentity,
-    input: { layerId: string; sealedAt: string; title: string },
+    input: { layerId: string; sealedAt: string; stackChildThreadIds?: readonly string[]; title: string },
     resolveStatus: GitArcStackStatusResolver,
   ): Promise<GitArcPreparedOperation<GitArcStackResult> | null> {
     const registry = this.registry();
@@ -414,10 +452,11 @@ export default class GitArcStackController {
       threadId: entry.threadId,
       title: input.title.trim(),
     };
+    const scopePaths = [...new Set(pending.flatMap(({ metadata }) => metadata.paths))].sort();
     const prepared = await store.prepareCheckpoint(identity.harness, identity.threadId, tree, parent, {
       amendedFrom: null,
       kind: "stack",
-      scopePaths: [...new Set(pending.flatMap(({ metadata }) => metadata.paths))].sort(),
+      scopePaths,
       stackLayer,
       version: 3,
     });
@@ -428,7 +467,15 @@ export default class GitArcStackController {
       { ...entry, stackTip: prepared.checkpointCommit },
       active.filter(path => !sealedPaths.covers(path)),
     );
-    const mutation = await registry.prepareSet(nextEntry, entry.checkpointCommit);
+    const nextChain: GitArcStackLayer[] = [...parentTip ? chain : [], { layer: stackLayer, parent, scopePaths, tipCommit: prepared.checkpointCommit }];
+    const children = new Set((input.stackChildThreadIds ?? []).map(normalizeThreadId));
+    const followers: StackIdentityLike[] = [];
+    for (const candidate of children.size ? await registry.list() : []) {
+      if (children.has(normalizeThreadId(candidate.threadId)) && await this.canFollow(candidate, nextChain)) followers.push(candidate);
+    }
+    const mutation = await registry.prepareSet(nextEntry, entry.checkpointCommit, {
+      followStackTip: { identities: followers.map(({ harness, threadId }) => ({ harness: harness as GitArcHarness, threadId })), tip: prepared.checkpointCommit },
+    });
     const updates = [...freshUpdates, prepared.update, ...mutation.updates];
     return this.operation(updates, {
       ...this.resultBase(entry),

@@ -40,6 +40,7 @@ interface PlanInput {
   intentDescription?: string;
   intentName: string;
   paths: string[];
+  stackParentThreadId?: string | null;
   threadId: string;
 }
 
@@ -53,6 +54,8 @@ interface PlanRequest {
 interface PlanOptions {
   baselinePlan?: StoredCheckpoint | null;
   skippedIgnoredPaths?: string[];
+  /** The planning thread's same-folder parent, whose pending stack it builds on. */
+  stackParentThreadId?: string | null | undefined;
 }
 
 interface PlanIdentityInput {
@@ -282,10 +285,10 @@ export default class GitArcPlanController {
       intentDescription: input.intentDescription ?? "",
       intentName: input.intentName,
       paths: input.paths,
-    }, { baselinePlan });
+    }, { baselinePlan, stackParentThreadId: input.stackParentThreadId });
   }
 
-  async editClaims(input: PlanIdentityInput & GitArcClaimChanges & { intentName?: string; intentDescription?: string; start?: boolean }) {
+  async editClaims(input: PlanIdentityInput & GitArcClaimChanges & { intentName?: string; intentDescription?: string; stackParentThreadId?: string | null; start?: boolean }) {
     const repository = await WorkbenchGitRepository.open(input.cwd);
     const harness = normalizeHarness(input.harness);
     const registry = this.registry(repository);
@@ -321,10 +324,11 @@ export default class GitArcPlanController {
       intentName,
       paths,
     };
+    const planOptions = { baselinePlan, skippedIgnoredPaths, stackParentThreadId: input.stackParentThreadId };
     const result = input.start
       ? await this.activatePreparedPlan(repository, registry, harness, input, current,
-        await this.preparePlan(repository, registry, harness, input.threadId, current, planInput, { baselinePlan, skippedIgnoredPaths }))
-      : await this.writePlan(repository, registry, harness, input.threadId, current, planInput, { baselinePlan, skippedIgnoredPaths });
+        await this.preparePlan(repository, registry, harness, input.threadId, current, planInput, planOptions))
+      : await this.writePlan(repository, registry, harness, input.threadId, current, planInput, planOptions);
     const existingPaths = new Set(existing);
     const nextPaths = new Set([...paths, ...(result.kind === "noop" ? [] : result.retainedPaths ?? [])]);
     return {
@@ -357,7 +361,7 @@ export default class GitArcPlanController {
       intentDescription: input.intentDescription ?? "",
       intentName: input.intentName,
       paths: input.paths,
-    }, { baselinePlan });
+    }, { baselinePlan, stackParentThreadId: input.stackParentThreadId });
     return await this.activatePreparedPlan(repository, registry, harness, input, current, plan);
   }
 
@@ -413,6 +417,7 @@ export default class GitArcPlanController {
       proposalIds: await activationProposalIds(store, harness, input.threadId, current, retainedArc),
       retainedArc: undefined,
       ...(successor ? { savedStash: successor.savedStash } : {}),
+      ...(plan.stackTip ? { stackTip: plan.stackTip } : {}),
       threadId: input.threadId,
     }, current ? { expectedCheckpointCommit: current.checkpointCommit } : undefined);
     await repository.updateRefs([
@@ -629,6 +634,7 @@ export default class GitArcPlanController {
       proposalIds: [],
       retainedArc: retainedArc ?? undefined,
       ...(successor ? { savedStash: successor.savedStash } : {}),
+      ...(plan.stackTip ? { stackTip: plan.stackTip } : {}),
       threadId,
     }, current?.checkpointCommit);
     await repository.updateRefs([
@@ -788,6 +794,7 @@ export default class GitArcPlanController {
       retainedArc: retained.retainedArc,
       retainedPaths,
       skippedIgnoredPaths,
+      stackTip: await new GitArcStackController(repository, this.resolveThreadIdentity).parentStackTip(current, options.stackParentThreadId),
       tree,
     };
   }

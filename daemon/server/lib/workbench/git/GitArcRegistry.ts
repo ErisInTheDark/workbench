@@ -166,6 +166,8 @@ export interface GitArcRegistryReplaceOptions {
   claimLossSnapshot?: GitWorktreeSnapshot;
   /** Other threads whose stack tips clear in the same write. */
   detachStackTips?: readonly GitArcIdentity[];
+  /** Other threads whose stack tips move to `tip` in the same write. */
+  followStackTip?: { identities: readonly GitArcIdentity[]; tip: string };
 }
 
 export interface GitArcPreparedOperation<Result> {
@@ -355,13 +357,13 @@ export default class GitArcRegistry {
     return candidates.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
   }
 
-  private async withoutStackTips(state: GitArcRegistryState, identities: readonly GitArcIdentity[] = []) {
+  private async withStackTips(state: GitArcRegistryState, identities: readonly GitArcIdentity[], stackTip: string | null) {
     if (!identities.length) return state;
     const keys = new Set(identities.map(identityKey));
     const rows = new Map((await this.resolveEntries(state.entries)).map(({ raw, resolved }) => [raw, resolved]));
     const entries = state.entries.map((entry) => {
       const resolved = rows.get(entry);
-      return resolved && keys.has(identityKey(resolved)) ? { ...entry, stackTip: null } : entry;
+      return resolved && keys.has(identityKey(resolved)) ? { ...entry, stackTip } : entry;
     });
     return { entries, version: 1 } satisfies GitArcRegistryState;
   }
@@ -566,10 +568,11 @@ export default class GitArcRegistry {
   async prepareSet(
     entry: Omit<GitArcRegistryEntry, "updatedAt">,
     expectedCheckpointCommit?: string,
-    options?: Pick<GitArcRegistryReplaceOptions, "claimLossSnapshot" | "detachStackTips">,
+    options?: Pick<GitArcRegistryReplaceOptions, "claimLossSnapshot" | "detachStackTips" | "followStackTip">,
   ): Promise<GitArcRegistryMutation> {
     const { blob, state: storedState } = await this.readStored();
-    const state = await this.withoutStackTips(storedState, options?.detachStackTips);
+    const detached = await this.withStackTips(storedState, options?.detachStackTips ?? [], null);
+    const state = await this.withStackTips(detached, options?.followStackTip?.identities ?? [], options?.followStackTip?.tip ?? null);
     const resolvedInput = await this.resolveIdentity(entry);
     if (!resolvedInput) throw new Error("The Git arc owner identity is unavailable.");
     const canonicalEntry = { ...entry, threadId: resolvedInput.threadId };

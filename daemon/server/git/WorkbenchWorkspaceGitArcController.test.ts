@@ -65,6 +65,39 @@ test("workspace status qualifies recovery facts and keeps roots with no lifecycl
   assert.deepEqual(expanded.baselineClaims, ["api:sealed.ts", "web:sealed.ts"]);
 });
 
+test("a subagent's family reaches every plan, seal and build view across repositories", async () => {
+  const local = new FakeLocalGitArcController();
+  const project = createWorkspace("C:/repo/api", "C:/repo/web");
+  const controller = new WorkbenchWorkspaceGitArcController(local as unknown as WorkbenchGitCheckpointController, new WorkbenchThreadTransitionCoordinator(), async (root) => root);
+  const identity = { cwd: project.cwd, harness: "codex" as const, threadId: "thread-one" };
+  const stackFamily = { childThreadIds: ["child-one"], parentThreadId: "parent-one" };
+  const seen: Array<[string, unknown]> = [];
+  const capture = (name: "createPlan" | "createAndStartPlan" | "editPlanClaims" | "readClaimView" | "readHeldPaths") => {
+    Object.assign(local, { [name]: async (input: { cwd: string; stackParentThreadId?: string | null }) => {
+      seen.push([name, input.stackParentThreadId]);
+      return { checkpointCommit: "c", checkpointRef: "r", kind: "plan", plannedPaths: [], repoRoot: input.cwd, scopePaths: [] };
+    } });
+  };
+  (["createPlan", "createAndStartPlan", "editPlanClaims", "readClaimView", "readHeldPaths"] as const).forEach(capture);
+  Object.assign(local, { prepareStackOperation: async (_input: unknown, operation: { stackChildThreadIds?: readonly string[] }) => {
+    seen.push(["stack", operation.stackChildThreadIds]);
+    return null;
+  } });
+  const plan = { ...identity, adoptPaths: [], intentDescription: "", intentName: "work", paths: [], roots: [] };
+  await controller.execute(project, { ...plan, action: "plan" }, { stackFamily }).catch(() => {});
+  await controller.execute(project, { ...plan, action: "planStart" }, { stackFamily }).catch(() => {});
+  await controller.execute(project, {
+    ...identity, action: "planClaims", inherit: false, start: false, intentName: "work", addPaths: [], removePaths: [], adoptPaths: [], roots: [],
+  }, { stackFamily }).catch(() => {});
+  await controller.execute(project, { ...identity, action: "arcTree", holdOwn: false, paths: [] }, { stackFamily }).catch(() => {});
+  await controller.execute(project, { ...identity, action: "arcHeld", contents: false, holdOwn: false }, { stackFamily }).catch(() => {});
+  await controller.execute(project, { ...identity, action: "arcStack", title: "layer" }, { stackFamily }).catch(() => {});
+  for (const name of ["createPlan", "createAndStartPlan", "editPlanClaims", "readClaimView", "readHeldPaths"]) {
+    assert.deepEqual(seen.find(([called]) => called === name)?.[1], "parent-one", name);
+  }
+  assert.deepEqual(seen.find(([called]) => called === "stack")?.[1], ["child-one"]);
+});
+
 test("proposal lookup never mistakes unexpected missing-data errors for an absent proposal", async () => {
   const local = new FakeLocalGitArcController();
   const project = createWorkspace("C:/repo/api", "C:/repo/web");

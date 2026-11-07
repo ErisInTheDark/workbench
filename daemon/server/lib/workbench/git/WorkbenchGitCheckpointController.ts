@@ -283,12 +283,12 @@ export default class WorkbenchGitCheckpointController {
   }
 
   /** The worktree as one owner builds it; hold the repository read gate around this only. */
-  async readClaimView(input: ControllerInput & Pick<GitArcClaimViewInput, "holdOwn" | "signal">) {
+  async readClaimView(input: ControllerInput & Pick<GitArcClaimViewInput, "holdOwn" | "signal" | "stackParentThreadId">) {
     return await this.views.readClaimView({ ...input, harness: normalizeHarness(input.harness) });
   }
 
   /** That view's held paths and baseline (and their bytes on request), without composing it; hold the repository read gate around this only. */
-  async readHeldPaths(input: ControllerInput & Pick<GitArcHeldPathsInput, "contents" | "holdOwn" | "signal">) {
+  async readHeldPaths(input: ControllerInput & Pick<GitArcHeldPathsInput, "contents" | "holdOwn" | "signal" | "stackParentThreadId">) {
     return await this.views.readHeldPaths({ ...input, harness: normalizeHarness(input.harness) });
   }
 
@@ -322,7 +322,7 @@ export default class WorkbenchGitCheckpointController {
   /** Prepare one repository's stack or unstack so workspace callers can apply or compensate it. Null means nothing to change here. */
   async prepareStackOperation(
     input: ControllerInput,
-    operation: { action: "stack"; layerId: string; sealedAt: string; title: string } | { action: "unstack"; layerId?: string },
+    operation: { action: "stack"; layerId: string; sealedAt: string; stackChildThreadIds?: readonly string[]; title: string } | { action: "unstack"; layerId?: string },
   ) {
     return await GitObjectReadSession.run(async () => {
       const repository = await WorkbenchGitRepository.open(input.cwd);
@@ -341,9 +341,11 @@ export default class WorkbenchGitCheckpointController {
     });
   }
 
-  async stackArc(input: ControllerInput & { title: string }): Promise<GitArcStackResult> {
+  async stackArc(input: ControllerInput & { stackChildThreadIds?: readonly string[]; title: string }): Promise<GitArcStackResult> {
     const prepared = await this.prepareStackOperation(input, {
-      action: "stack", layerId: randomUUID(), sealedAt: new Date().toISOString(), title: input.title,
+      action: "stack", layerId: randomUUID(), sealedAt: new Date().toISOString(),
+      ...(input.stackChildThreadIds ? { stackChildThreadIds: input.stackChildThreadIds } : {}),
+      title: input.title,
     });
     if (!prepared) throw new GitArcRejectionError({ reason: "noProposalsToStack" });
     return await prepared.apply();
@@ -911,9 +913,10 @@ export default class WorkbenchGitCheckpointController {
     intentName,
     intentDescription = "",
     paths: rawPaths,
+    stackParentThreadId,
     threadId,
-  }: ControllerInput & { adoptPaths?: string[]; intentDescription?: string; intentName: string; paths: string[] }): Promise<GitCheckpointCreateResult | GitArcNoopResult> {
-    return await GitObjectReadSession.run(() => this.plans.createPlan({ adoptPaths, cwd, harness: rawHarness, intentDescription, intentName, paths: rawPaths, threadId }));
+  }: ControllerInput & { adoptPaths?: string[]; intentDescription?: string; intentName: string; paths: string[]; stackParentThreadId?: string | null }): Promise<GitCheckpointCreateResult | GitArcNoopResult> {
+    return await GitObjectReadSession.run(() => this.plans.createPlan({ adoptPaths, cwd, harness: rawHarness, intentDescription, intentName, paths: rawPaths, stackParentThreadId, threadId }));
   }
 
   async addToPlan(input: ControllerInput & { paths: string[] }) {
@@ -928,7 +931,7 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(() => this.plans.removeFromPlan(input));
   }
 
-  async createAndStartPlan(input: ControllerInput & { adoptPaths?: string[]; intentDescription?: string; intentName: string; paths: string[] }) {
+  async createAndStartPlan(input: ControllerInput & { adoptPaths?: string[]; intentDescription?: string; intentName: string; paths: string[]; stackParentThreadId?: string | null }) {
     return await GitObjectReadSession.run(() => this.plans.createAndStartPlan(input));
   }
 
@@ -940,7 +943,7 @@ export default class WorkbenchGitCheckpointController {
     return await GitObjectReadSession.run(() => this.lifecycle.continue(input));
   }
 
-  async editPlanClaims(input: ControllerInput & GitArcClaimChanges & { intentName?: string; intentDescription?: string; start?: boolean }) {
+  async editPlanClaims(input: ControllerInput & GitArcClaimChanges & { intentName?: string; intentDescription?: string; stackParentThreadId?: string | null; start?: boolean }) {
     return await GitObjectReadSession.run(() => this.plans.editClaims(input));
   }
 

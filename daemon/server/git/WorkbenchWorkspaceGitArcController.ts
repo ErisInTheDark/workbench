@@ -1,6 +1,7 @@
 /*
  * Exports:
  * - WorkspaceGitArcMemberError: preserve failed/completed member facts around the original failure.
+ * - GitArcStackFamily: a thread's same-folder parent and children, whose pending stacks it shares.
  * - default WorkbenchWorkspaceGitArcController: aggregate status, recovery, stack layers and paged diffs; route mutations, process documents, history retention and durable-commit time reads; admit agent file changes.
  * - WorkspaceGitArcMemberState: active repository plus root identity.
  * - WorkspaceGitArcLifecycleState: workspace lifecycle projection.
@@ -170,6 +171,11 @@ function contributesScope(scope: GitArcScopeState) {
 
 function isEmptyPlan(scope: GitArcScopeState) {
   return scope.phase === "plan" && !scope.plannedPaths.length;
+}
+
+export interface GitArcStackFamily {
+  childThreadIds: readonly string[];
+  parentThreadId: string | null;
 }
 
 function identityKey(harness: string, threadId: string) {
@@ -575,7 +581,7 @@ export default class WorkbenchWorkspaceGitArcController {
   async execute(
     project: AgentEndpointProjectResolution,
     request: GitCheckpointRequest,
-    options: { modifiedSince?: number; signal?: AbortSignal } = {},
+    options: { modifiedSince?: number; signal?: AbortSignal; stackFamily?: GitArcStackFamily } = {},
   ) {
     const members = await this.resolveRepoMembers(project);
     switch (request.action) {
@@ -623,18 +629,19 @@ export default class WorkbenchWorkspaceGitArcController {
         // Mirroring happens at ingress after these member read gates are released.
         const values = await this.runMembers(selected, async member => await this.local.readClaimView({
           cwd: member.repoRoot, harness: request.harness, threadId: request.threadId, holdOwn: request.holdOwn, signal: options.signal,
+          stackParentThreadId: options.stackFamily?.parentThreadId ?? null,
         }), undefined, "read");
         return { repositories: values.map(({ result }) => result) } satisfies GitArcClaimViewResult;
       }
       case "arcHeld": {
         const values = await this.runMembers(await this.joinedMembers(members, request.harness, request.threadId), async member => await this.local.readHeldPaths({
           cwd: member.repoRoot, harness: request.harness, threadId: request.threadId, contents: request.contents, holdOwn: request.holdOwn,
-          signal: options.signal,
+          signal: options.signal, stackParentThreadId: options.stackFamily?.parentThreadId ?? null,
         }), undefined, "read");
         return { repositories: values.map(({ result }) => result) } satisfies GitArcHeldPathsResult;
       }
       case "planClaims":
-      case "arcClaims": return await this.executeClaimChanges(project, members, request);
+      case "arcClaims": return await this.executeClaimChanges(project, members, request, options.stackFamily);
       case "arcScope": {
         const values = await this.runMembers(members, async (member) => await this.local.readScope({
           cwd: member.repoRoot, harness: request.harness, threadId: request.threadId,
@@ -649,7 +656,7 @@ export default class WorkbenchWorkspaceGitArcController {
         } : null;
       }
       case "plan":
-      case "planStart": return await this.executePlan(project, members, request);
+      case "planStart": return await this.executePlan(project, members, request, options.stackFamily);
       case "planAdd":
       case "planAdopt":
       case "planRemove":
@@ -661,7 +668,7 @@ export default class WorkbenchWorkspaceGitArcController {
       case "arcUnstash": return await this.executeStash(project, members, request);
       case "arcDiscardStash": return await this.executeDiscardStash(project, members, request);
       case "arcStack":
-      case "arcUnstack": return await this.executeStack(project, members, request);
+      case "arcUnstack": return await this.executeStack(project, members, request, options.stackFamily);
       case "arcRestack": return await this.executeRestack(project, members, request);
       case "arcAdoptSource": throw new Error("Source adoption requires canonical identity ingress.");
       case "arcTransferClaims": throw new Error("Selected claim transfer requires canonical child identity ingress.");
@@ -1032,6 +1039,7 @@ export default class WorkbenchWorkspaceGitArcController {
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "planClaims" | "arcClaims" }>,
+    stackFamily?: GitArcStackFamily,
   ) {
     const additions = this.groupRootPaths(project, members, request.addPaths, request.roots.map((root) => ({
       rootId: root.rootId, paths: root.addPaths, adoptPaths: root.adoptPaths,
@@ -1079,6 +1087,7 @@ export default class WorkbenchWorkspaceGitArcController {
         inherit: Boolean(scope) && request.inherit,
         intentName: request.action === "planClaims" ? request.intentName ?? (!scope ? inheritedIntent : undefined) : inheritedIntent,
         ...(request.action === "planClaims" ? { intentDescription: request.intentDescription } : {}),
+        stackParentThreadId: stackFamily?.parentThreadId ?? null,
         start: starting && !publishesOnly(member),
       });
     }, undefined, "write", { harness: request.harness, project, threadId: request.threadId });
@@ -1089,6 +1098,7 @@ export default class WorkbenchWorkspaceGitArcController {
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "plan" | "planStart" }>,
+    stackFamily?: GitArcStackFamily,
   ) {
     const unnamed = !request.paths.length && !request.adoptPaths.length && !request.roots.length;
     const groups = this.groupRootPaths(project, members, request.paths, request.roots, request.adoptPaths, unnamed ? await this.callerMember(project, members, request) : undefined);
@@ -1099,7 +1109,7 @@ export default class WorkbenchWorkspaceGitArcController {
       const input = {
         adoptPaths: group.adoptPaths, cwd: member.repoRoot, harness: request.harness,
         intentDescription: request.intentDescription, intentName: request.intentName, paths: group.paths,
-        threadId: request.threadId,
+        stackParentThreadId: stackFamily?.parentThreadId ?? null, threadId: request.threadId,
       };
       return request.action === "plan"
         ? await this.local.createPlan(input)
@@ -1252,6 +1262,7 @@ export default class WorkbenchWorkspaceGitArcController {
     project: AgentEndpointProjectResolution,
     members: readonly RepoMember[],
     request: Extract<GitCheckpointRequest, { action: "arcStack" | "arcUnstack" }>,
+    stackFamily?: GitArcStackFamily,
   ) {
     const identity = { harness: request.harness, threadId: request.threadId };
     const prepared = new Map<string, GitArcPreparedOperation<GitArcStackResult>>();
@@ -1259,7 +1270,7 @@ export default class WorkbenchWorkspaceGitArcController {
       members,
       async () => {
         const operation = request.action === "arcStack"
-          ? { action: "stack" as const, layerId: randomUUID(), sealedAt: new Date().toISOString(), title: request.title }
+          ? { action: "stack" as const, layerId: randomUUID(), sealedAt: new Date().toISOString(), stackChildThreadIds: stackFamily?.childThreadIds ?? [], title: request.title }
           : { action: "unstack" as const, layerId: await this.latestOwnStackLayerId(members, identity) };
         for (const member of members) {
           const value = await this.local.prepareStackOperation({ ...identity, cwd: member.repoRoot }, operation);

@@ -53,7 +53,7 @@ import type { AgentEndpointProjectResolution } from "../lib/workbench/project/ag
 import type { ResolvedProject } from "../lib/project";
 import type { WorkbenchThreadClaimContext } from "../thread/WorkbenchThreadStateController";
 import type { WorkbenchGitClaimSnapshot } from "../stats/git-claim-observation";
-import WorkbenchWorkspaceGitArcController, { WorkspaceGitArcMemberError, type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
+import WorkbenchWorkspaceGitArcController, { WorkspaceGitArcMemberError, type GitArcStackFamily, type WorkspaceGitArcLifecycleState, type WorkspaceGitArcPlanState } from "./WorkbenchWorkspaceGitArcController";
 import type WorkbenchThreadIdentityController from "../thread/WorkbenchThreadIdentityController";
 import { WorkbenchHarnessSchema, type WorkbenchGitArcLifecycleState as ObservedGitArcLifecycleState } from "workbench-shared/workbench/thread/thread-state";
 import { installedProviderKeys } from "workbench-shared/workbench/provider/provider-registrations";
@@ -94,6 +94,7 @@ export interface WorkbenchGitArcFeatureOptions {
   refreshThreadGitArcState(projectId: ProjectId, harness: WorkbenchHarness, threadId: WorkbenchThreadId): Promise<void>;
   publishAgentContext?(target: WorkbenchAgentContextTarget, text: string): Promise<WorkbenchContextAdmission | "failed">;
   resolveSubagentPeer?(input: { cwd: string; parentThreadId: WorkbenchThreadId; name: string }): Promise<{ harness: WorkbenchHarness; threadId: WorkbenchThreadId }>;
+  resolveStackFamily?(input: { projectId: ProjectId; threadId: WorkbenchThreadId }): Promise<GitArcStackFamily>;
   onReloadEligibilityChanged?: () => void;
   observeClaimSnapshot?(snapshot: WorkbenchGitClaimSnapshot): void;
   reloadScopeProjectRoot?: string;
@@ -136,6 +137,7 @@ const GIT_ARC_STATE_MUTATION_ACTIONS = new Set<GitCheckpointRequest["action"]>([
 ]);
 const COALESCED_CARD_READ_ACTIONS = new Set<GitCheckpointRequest["action"]>(["compare", "proposalState"]);
 const CLAIM_START_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcContinue", "arcStart", "planStart"]);
+const STACK_FAMILY_ACTIONS = new Set<GitCheckpointRequest["action"]>(["arcClaims", "arcHeld", "arcStack", "arcTree", "plan", "planClaims", "planStart"]);
 
 function acceptanceKey(owner: { harness: string; threadId: string }) {
   return `${owner.harness}\0${owner.threadId}`;
@@ -591,6 +593,9 @@ export default class WorkbenchGitArcFeature {
         }
       }
       if (mutatesGitArcState(effectiveRequest)) this.fencePendingCardReads(project.cwd);
+      const stackFamily = STACK_FAMILY_ACTIONS.has(effectiveRequest.action)
+        ? await this.options.resolveStackFamily?.({ projectId: project.project.id, threadId: owner.threadId })
+        : undefined;
       const execute = async () => {
         try {
           if (CLAIM_START_ACTIONS.has(effectiveRequest.action)) {
@@ -637,19 +642,19 @@ export default class WorkbenchGitArcFeature {
               ? await this.dispatch(effectiveRequest)
               : usesWorkspaceController(project, effectiveRequest)
                 ? Response.json(await this.workspaceController.execute(project, effectiveRequest, {
-                  modifiedSince: modifiedSince ?? undefined, signal: this.lifecycleSignal(signal),
+                  modifiedSince: modifiedSince ?? undefined, signal: this.lifecycleSignal(signal), stackFamily,
                 }))
                 : mutatesGitArcState(effectiveRequest)
                   ? await this.options.transitions.run(project.cwd, async () => {
                     try {
-                      return await this.dispatch(effectiveRequest);
+                      return await this.dispatch(effectiveRequest, undefined, undefined, stackFamily);
                     } finally {
                       await this.observeLocalClaimSnapshot(project, effectiveRequest.harness, effectiveRequest.threadId);
                     }
                   })
                   : effectiveRequest.action === "proposalState"
                     ? await this.readProposalInBatch(project.cwd, async () => await this.dispatch(effectiveRequest))
-                    : await this.readUnderGate(project.cwd, async () => await this.dispatch(effectiveRequest, modifiedSince ?? undefined, this.lifecycleSignal(signal)));
+                    : await this.readUnderGate(project.cwd, async () => await this.dispatch(effectiveRequest, modifiedSince ?? undefined, this.lifecycleSignal(signal), stackFamily));
             // Mirroring copies an immutable view tree into an ignored folder, so it runs after the Git gate is released.
             if (response.ok && effectiveRequest.action === "arcTree" && effectiveRequest.into) {
               const { into, paths } = effectiveRequest;
@@ -1309,10 +1314,11 @@ export default class WorkbenchGitArcFeature {
     };
   }
 
-  private async dispatch(input: GitCheckpointRequest, modifiedSince?: number, signal?: AbortSignal) {
+  private async dispatch(input: GitCheckpointRequest, modifiedSince?: number, signal?: AbortSignal, stackFamily?: GitArcStackFamily) {
     const common = { cwd: input.cwd, harness: input.harness, threadId: input.threadId };
+    const stackParentThreadId = stackFamily?.parentThreadId ?? null;
     switch (input.action) {
-      case "planClaims": return Response.json(await this.controller.editPlanClaims({ ...common, ...input }));
+      case "planClaims": return Response.json(await this.controller.editPlanClaims({ ...common, ...input, stackParentThreadId }));
       case "arcClaims": return Response.json(await this.controller.editArcClaims({ ...common, ...input }));
       case "arcAdoptSource": throw new Error("Source adoption requires canonical identity ingress.");
       case "proposalCommitMany": throw new Error("Batched acceptance reports per-proposal failures through its own ingress.");
@@ -1320,19 +1326,19 @@ export default class WorkbenchGitArcFeature {
       case "arcScope": return Response.json(await this.controller.readScope(common));
       case "arcStatus": return Response.json(await this.controller.readStatus(common));
       case "arcTree": return Response.json({
-        repositories: [await this.controller.readClaimView({ ...common, holdOwn: input.holdOwn, signal })],
+        repositories: [await this.controller.readClaimView({ ...common, holdOwn: input.holdOwn, signal, stackParentThreadId })],
       } satisfies GitArcClaimViewResult);
       case "arcHeld": return Response.json({
-        repositories: [await this.controller.readHeldPaths({ ...common, contents: input.contents, holdOwn: input.holdOwn, signal })],
+        repositories: [await this.controller.readHeldPaths({ ...common, contents: input.contents, holdOwn: input.holdOwn, signal, stackParentThreadId })],
       } satisfies GitArcHeldPathsResult);
       case "plan": return Response.json(await this.controller.createPlan({
-        ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
+        ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths, stackParentThreadId,
       }));
       case "planAdd": return Response.json(await this.controller.addToPlan({ ...common, paths: input.paths }));
       case "planAdopt": return Response.json(await this.controller.adoptIntoPlan({ ...common, paths: input.paths }));
       case "planRemove": return Response.json(await this.controller.removeFromPlan({ ...common, paths: input.paths }));
       case "planStart": return Response.json(await this.controller.createAndStartPlan({
-        ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths,
+        ...common, adoptPaths: input.adoptPaths, intentDescription: input.intentDescription, intentName: input.intentName, paths: input.paths, stackParentThreadId,
       }));
       case "arcStart": return Response.json(await this.controller.startArc({ ...common, checkpointCommit: input.checkpointCommit }));
       case "arcWait": return Response.json(await this.controller.findPlanClaimCollisions({ ...common, checkpointCommit: input.checkpointCommit }));
@@ -1341,7 +1347,7 @@ export default class WorkbenchGitArcFeature {
       case "arcAdopt": return Response.json(await this.controller.adoptIntoArc({ ...common, paths: input.paths }));
       case "arcRemove": return Response.json(await this.controller.removeFromArc({ ...common, paths: input.paths }));
       case "arcRelease": return Response.json(await this.controller.releaseArc({ ...common, disown: input.disown, paths: input.paths }));
-      case "arcStack": return Response.json(await this.controller.stackArc({ ...common, title: input.title }));
+      case "arcStack": return Response.json(await this.controller.stackArc({ ...common, stackChildThreadIds: stackFamily?.childThreadIds ?? [], title: input.title }));
       case "arcUnstack": return Response.json(await this.controller.unstackArc(common));
       case "arcRestack": return Response.json(await this.controller.restackArc({
         ...common, drop: input.drop, fold: input.fold, strip: input.strip,

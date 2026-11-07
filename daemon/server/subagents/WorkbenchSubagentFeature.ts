@@ -122,4 +122,13 @@ export default class WorkbenchSubagentFeature {
   resolveGitArcPeer(input: { cwd: string; parentThreadId: WorkbenchThreadId; name: string }) {
     return this.controller.resolveGitArcPeer(input);
   }
+  /** A thread's unsettled relatives in this folder: a remote parent or other-folder child never shares its Git arcs. */
+  async resolveGitArcFamily(input: { projectId: ProjectId; threadId: WorkbenchThreadId }) {
+    const { subagents } = await this.store.list({ projectId: input.projectId });
+    const own = subagents.find(({ threadId }) => threadId === input.threadId);
+    return {
+      childThreadIds: subagents.filter(({ location, parentThreadId }) => parentThreadId === input.threadId && !location).map(({ threadId }) => threadId),
+      parentThreadId: own && !own.parent ? own.parentThreadId : null,
+    };
+  }
 }

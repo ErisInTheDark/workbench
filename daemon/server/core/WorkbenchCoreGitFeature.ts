@@ -51,7 +51,7 @@ export default class WorkbenchCoreGitFeature {
      * replacement instead of its retired database.
      */
     publishThreadState(operation: (state: WorkbenchThreadStateFeature) => Promise<void>): Promise<void>;
-    subagents: () => Pick<WorkbenchSubagentFeature, "resolveGitArcPeer">;
+    subagents: () => Pick<WorkbenchSubagentFeature, "resolveGitArcFamily" | "resolveGitArcPeer">;
     stats: () => Pick<WorkbenchStatsController, "observeClaimSnapshot"> | null;
     /** Built after this feature, read at call time; decides new machine claims through the thread's approval mode. */
     approvals: () => Pick<WorkbenchApprovalController, "request">;
@@ -106,6 +106,7 @@ export default class WorkbenchCoreGitFeature {
       },
       publishAgentContext: (target, text) => ports.agentContext.publish(target, text),
       resolveSubagentPeer: input => ports.subagents().resolveGitArcPeer(input),
+      resolveStackFamily: input => ports.subagents().resolveGitArcFamily(input),
       observeClaimSnapshot: (snapshot) => ports.stats()?.observeClaimSnapshot(snapshot),
       listCatalogProjects: async () => (await projectCatalog.readCatalog()).data,
       resolveProjectFromCwd: async (cwd, ownerThreadId) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc", ownerThreadId }),

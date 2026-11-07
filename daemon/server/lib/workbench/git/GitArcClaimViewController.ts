@@ -3,7 +3,7 @@
  * - GitArcClaimViewInput: owner and hold-own choice for a build view.
  * - GitArcHeldPathsInput: that choice plus whether held paths' view bytes are read too.
  * - default GitArcClaimViewController: write the worktree as one owner builds it (every file of other live owners' claims
- *   at HEAD plus the caller's own or inherited sealed layers, written through one index); list just those held paths
+ *   at HEAD plus the sealed layers the caller builds on, written through one index); list just those held paths
  *   and the baseline holding their view bytes (with those bytes as a checkout writes them on request), diffing only
  *   claimed paths; and mirror selected paths of a view into an
  *   ignored directory, checking out only files whose content differs and removing only files its own record says it
@@ -30,6 +30,8 @@ export interface GitArcClaimViewInput {
   holdOwn: boolean;
   /** Aborts once the caller is gone, so abandoned views stop composing. */
   signal?: AbortSignal;
+  /** The caller's same-folder parent, whose pending stack a caller with no stack reads through. */
+  stackParentThreadId?: string | null;
   threadId: string;
 }
 
@@ -218,21 +220,26 @@ export default class GitArcClaimViewController {
       const claimed = getGitArcLiveClaimPaths(entry);
       return claimed.length && (input.holdOwn || !isCaller(entry)) ? [{ claimed, threadId: entry.threadId }] : [];
     });
-    return { baseline: await this.callerBaseline(repository, entries.find(isCaller), head), head, owners };
+    return { baseline: await this.callerBaseline(repository, input, entries.find(isCaller), head), head, owners };
   }
 
   /**
-   * HEAD with the sealed layers the caller's own arc builds on (its own, or a parent's it inherited), else plain HEAD.
+   * HEAD with the sealed layers the caller builds on (its own, or a parent's) whatever its lifecycle phase, else plain
+   * HEAD. Pending tips always shape it; a landed tip needs a live arc's checkpoint to say whether it has been passed.
    * Other owners' layers never shape it: their sealed work is theirs until the caller's stack contains it.
    */
-  private async callerBaseline(repository: WorkbenchGitRepository, entry: GitArcRegistryEntry | undefined, head: string | null) {
-    const arc = entry?.phase === "plan" ? entry.retainedArc : entry;
-    if (!entry?.stackTip || !arc || arc.phase === "resolved") return head;
-    const checkpoint = await new GitCheckpointStore(repository, this.resolveThreadIdentity)
-      .readCheckpoint(entry.harness as GitArcHarness, entry.threadId, arc.checkpointCommit);
+  private async callerBaseline(repository: WorkbenchGitRepository, input: GitArcClaimViewInput, entry: GitArcRegistryEntry | undefined, head: string | null) {
     const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
-    const tip = await stack.baselineTip(entry, { parent: checkpoint.parent });
-    return tip ? await stack.sealedTree(head, tip.commit) : head;
+    const inherited = await stack.viewTip(entry, input.stackParentThreadId);
+    if (inherited) return await stack.sealedTree(head, inherited);
+    if (!entry?.stackTip) return head;
+    const arc = entry.phase === "plan" ? entry.retainedArc : entry;
+    const live = arc && arc.phase !== "resolved" ? arc : null;
+    const parent = live
+      ? (await new GitCheckpointStore(repository, this.resolveThreadIdentity).readCheckpoint(entry.harness as GitArcHarness, entry.threadId, live.checkpointCommit)).parent
+      : null;
+    const tip = await stack.baselineTip(entry, { parent });
+    return tip && (live || tip.pending) ? await stack.sealedTree(head, tip.commit) : head;
   }
 
   /**

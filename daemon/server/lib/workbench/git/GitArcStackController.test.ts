@@ -1,6 +1,7 @@
 /*
  * Exports: none. Protect stack layer waiting, sealing, reopening, batch landing, history rewrites, subagent transfer,
- * held-path reads and contents matching arc trees, and arc tree cancellation on prepared branches.
+ * subagents attaching to and following their parent's stack, held-path reads and contents matching arc trees, and arc
+ * tree cancellation on prepared branches.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -22,11 +23,14 @@ const fixtures = new GitTestFixtureCache();
 const controller = new WorkbenchGitCheckpointController();
 let fixture: GitTestFixtureCopy<StackFixtureState> | null = null;
 let batchRoot = "";
+let familyRoot = "";
 before(async () => {
   fixture = await fixtures.copy(STACK_OPERATIONS_FIXTURE);
-  // Other tests reshape the sealed branch; the batch test stacks its own layers on a pristine copy.
+  // Other tests reshape the sealed branch; these stack their own layers on pristine copies.
   batchRoot = path.join(fixture.bundleRoot, "r/batch");
+  familyRoot = path.join(fixture.bundleRoot, "r/family");
   await fs.cp(path.join(fixture.bundleRoot, fixture.state.sealed.root), batchRoot, { recursive: true });
+  await fs.cp(path.join(fixture.bundleRoot, fixture.state.sealed.root), familyRoot, { recursive: true });
 }, { timeout: 30_000 });
 after(async () => { await fixture?.dispose(); });
 
@@ -472,6 +476,124 @@ test("held paths cover other threads' whole claims at the view's bytes, before a
     "arc trees list the same held paths",
   );
   assert.equal((await controller.readHeldPaths({ cwd, threadId: "owner", holdOwn: false, contents: false })).contents, undefined);
+});
+
+async function family(name: string) {
+  const cwd = path.join(fixture!.bundleRoot, "r", name);
+  await fs.cp(familyRoot, cwd, { recursive: true });
+  const registry = new GitArcRegistry(await WorkbenchGitRepository.open(cwd));
+  const tip = async (threadId: string) => (await registry.find({ harness: "codex", threadId }))?.stackTip ?? null;
+  const seal = async (content: string, children: string[] = []) => {
+    await fs.writeFile(path.join(cwd, "one.txt"), content);
+    await controller.createProposal({ cwd, threadId: "owner", paths: ["one.txt"], title: content.trim(), description: "" });
+    await controller.stackArc({ cwd, threadId: "owner", title: content.trim(), stackChildThreadIds: children });
+    return await tip("owner");
+  };
+  const held = async (threadId: string, file: string) => {
+    const bytes = (await controller.readHeldPaths({ cwd, threadId, holdOwn: false, contents: true })).contents?.[file];
+    return typeof bytes === "string" ? Buffer.from(bytes, "base64").toString() : bytes;
+  };
+  return { cwd, held, seal, tip };
+}
+
+test("a subagent builds on its parent's pending stack from its first plan and follows each seal", async () => {
+  const { cwd, held, seal, tip } = await family("family-follow");
+  await controller.createPlan({ cwd, threadId: "child", intentName: "child work", paths: ["child.txt"], stackParentThreadId: "owner" });
+  assert.equal(await tip("child"), await tip("owner"));
+  assert.equal(await held("child", "one.txt"), "first\n", "a planning child's build already reads the sealed layer");
+
+  const second = await seal("second\n", ["child"]);
+  assert.equal(await tip("child"), second);
+  assert.equal(await held("child", "one.txt"), "second\n");
+  assert.equal(await tip("other"), null, "threads outside the family never move");
+  assert.notEqual(await held("other", "one.txt"), "second\n");
+
+  await controller.startArc({ cwd, threadId: "child" });
+  assert.equal(await tip("child"), second, "activation keeps the inherited tip");
+  await fs.writeFile(path.join(cwd, "child.txt"), "child\n");
+  const proposed = await controller.createProposal({ cwd, threadId: "child", paths: ["child.txt"], title: "child", description: "" });
+  await assert.rejects(controller.commitProposal({
+    cwd, threadId: "child", proposalId: proposed.proposalId, title: "child", description: "", includeNewer: false,
+  }), "a child's proposal lands after the stack beneath it");
+
+  await seal("third\n", ["child"]);
+  assert.equal(await tip("child"), second, "a pending proposal keeps its stack base");
+  await controller.stackArc({ cwd, threadId: "child", title: "child layer" });
+  const childLayer = await tip("child");
+  await seal("fourth\n", ["child"]);
+  assert.equal(await tip("child"), childLayer, "a child's own layer stays where it was sealed");
+});
+
+test("a child on a stack that fully landed follows the parent's next one", async () => {
+  const { cwd, seal, tip } = await family("family-landed");
+  await controller.createPlan({ cwd, threadId: "child", intentName: "child work", paths: ["child.txt"], stackParentThreadId: "owner" });
+  await controller.commitProposal({
+    cwd, threadId: "owner", proposalId: fixture!.state.sealed.lower, title: "first", description: "", includeNewer: false,
+  });
+  await controller.createAndStartPlan({ cwd, threadId: "owner", intentName: "next stack", paths: ["one.txt"] });
+  const next = await seal("second\n", ["child"]);
+  assert.equal(await tip("child"), next);
+});
+
+test("a child that never plans builds on its parent's pending stack", async () => {
+  const { cwd, seal } = await family("family-reader");
+  const read = async (stackParentThreadId: string | null) => {
+    const held = await controller.readHeldPaths({ cwd, threadId: "reviewer", holdOwn: false, contents: true, stackParentThreadId });
+    return Buffer.from(held.contents?.["one.txt"] ?? "", "base64").toString();
+  };
+  assert.equal(await read("owner"), "first\n");
+  await seal("second\n");
+  assert.equal(await read("owner"), "second\n", "it reads the parent's newest layer with nothing to move");
+  assert.notEqual(await read(null), "second\n", "a thread with no parent stays at HEAD");
+});
+
+test("a claim transferred to an inactive plan holds at the stack for everyone, recipient included", async () => {
+  const { cwd, held, seal, tip } = await family("family-inactive");
+  await controller.createPlan({ cwd, threadId: "planner", intentName: "takes one", paths: ["one.txt"] });
+  const top = await seal("second\n");
+  await (await controller.prepareReleaseToChild({
+    cwd, threadId: "planner", source: { harness: "codex", threadId: "owner" }, selectedPaths: ["one.txt"],
+  })).apply();
+  assert.equal(await tip("planner"), top);
+  await fs.writeFile(path.join(cwd, "one.txt"), "planner edit\n");
+  assert.equal(await held("owner", "one.txt"), "second\n", "the releasing parent still reads its sealed layer");
+  assert.notEqual(await held("other", "one.txt"), "planner edit\n", "the recipient's edits stay held from other threads");
+});
+
+test("only a parent's pending stack attaches, children with no tip join the first seal, and saved work stays put", async () => {
+  const { cwd, seal, tip } = await family("family-unstacked");
+  await controller.createPlan({ cwd, threadId: "plain", intentName: "top level", paths: ["plain.txt"] });
+  assert.equal(await tip("plain"), null, "top-level threads never attach");
+  await controller.createPlan({ cwd, threadId: "orphan", intentName: "unknown parent", paths: ["orphan.txt"], stackParentThreadId: "absent" });
+  assert.equal(await tip("orphan"), null);
+
+  await controller.restackArc({ cwd, threadId: "owner", drop: [fixture!.state.sealed.lower], fold: [], strip: [] });
+  await controller.createPlan({ cwd, threadId: "early", intentName: "early", paths: ["early.txt"], stackParentThreadId: "owner" });
+  assert.equal(await tip("early"), null, "a parent with no pending stack leaves plain HEAD");
+  await controller.createAndStartPlan({ cwd, threadId: "stasher", intentName: "stash", paths: ["stash.txt"] });
+  await fs.writeFile(path.join(cwd, "stash.txt"), "saved\n");
+  await controller.stashArc({ cwd, threadId: "stasher" });
+
+  const sealed = await seal("again\n", ["early", "stasher"]);
+  assert.equal(await tip("early"), sealed);
+  assert.equal(await tip("stasher"), null, "saved work cannot sit on a pending stack");
+});
+
+test("pending layers shape a thread's view after its last claims leave, until they land", async () => {
+  const { cwd, held, tip } = await family("family-resolved");
+  await (await controller.prepareReleaseToChild({
+    cwd, threadId: "child", source: { harness: "codex", threadId: "owner" }, selectedPaths: ["one.txt"],
+  })).apply();
+  assert.ok(await tip("owner"));
+  assert.equal(await held("owner", "one.txt"), "first\n", "a resolved owner keeps its pending layers in view");
+
+  await controller.commitProposal({
+    cwd, threadId: "owner", proposalId: fixture!.state.sealed.lower, title: "first", description: "", includeNewer: false,
+  });
+  const repository = await WorkbenchGitRepository.open(cwd);
+  await fs.writeFile(path.join(cwd, "one.txt"), "later\n");
+  await repository.run(["commit", "--quiet", "-m", "later", "--", "one.txt"]);
+  assert.equal(await held("owner", "one.txt"), "later\n", "landed layers stop shaping a thread with no live arc");
 });
 
 test("uncommitted attributes change nothing a held read returns", async () => {

@@ -194,7 +194,8 @@ constraints:
 </docs>
 <docs tools="git_arc_stack">
 - Amend proposals cannot build on a pending stack. Stash is unavailable while a stack is pending
-- Subagent claim transfers keep sealed proposals; children inherit the stack baseline
+<!-- Failure: children assumed they saw a coordinator's work and validated the wrong tree, or asked for transfers just to see it. Children now read sealed layers automatically, so only unsealed parent work still needs sealing first. -->
+- Subagents build on parent's sealed layers, even before planning; each seal moves them unless they hold own layer, proposal or stash. Seal before children need unsealed parent work. Claim transfers keep sealed proposals
 </docs>
 </docs>
 
