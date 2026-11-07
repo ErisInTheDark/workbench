@@ -115,6 +115,8 @@ export interface WorkbenchProviderTools {
     hostsUserMessage?: boolean;
     /** The model sees a successful result's structured content instead of its text, so Workbench sends only the text. */
     modelReadsStructuredContent?: boolean;
+    /** Code-mode tools are called only from model-written scripts, so their results reach a program; the provider bounds what the script returns. */
+    nestsCodeModeTools?: boolean;
     /** The provider lets the model leave a running long wait and return to it, so Workbench offers no wait `timeoutMs`. */
     yieldsLongWaits?: boolean;
   }>;

@@ -145,6 +145,40 @@ test("oversized results spill for the model only, except tools whose text is the
   }
 });
 
+test("results of tools nested in provider code mode reach the script whole, while direct tools still spill", async () => {
+  const big = Array.from({ length: 3_000 }, (_, index) => `src/module${index}.ts:${index}: const value${index} = compute("item-${index}");\n`).join("");
+  const reference = { threadId: "thread", turnId: "turn", itemId: "item", sourceId: "child", parentId: "parent", tool: "shell", arguments: {}, startedAt: 1 } as WorkbenchToolTranscriptReference;
+  const tools: WorkbenchProviderTools = {
+    caller: async () => ({ harness: "opencode", threadId: reference.threadId, cwd: process.cwd() }),
+    describe: async () => ({ shellDescription: "test", nestsCodeModeTools: true }),
+    patchClaims: async () => "",
+    prepareExecution: async () => preparedShell(process.cwd()).run,
+    transcript: { start: async () => reference, finish: async () => {} },
+  };
+  const controller = new WorkbenchAgentMcpController({
+    tools: () => tools, daemonOrigin: "http://127.0.0.1:4500",
+    requestRegistry: new WorkbenchAgentMcpRequestRegistry(),
+    executeCommand: async () => new Response(big),
+    executeShell: async () => ({ exitCode: 1, stdout: big, stderr: "" }),
+    spillToolOutput: async () => ({ path: "C:/files/output.txt" }),
+  });
+  const server = await startController(controller);
+  const client = await connectClient(server.url);
+  try {
+    const shell = await client.callTool({ name: "shell", arguments: { command: "test" } });
+    assert.ok(responseText(shell).includes(big));
+    assert.equal((shell.structuredContent as { stdout: string }).stdout, big);
+    const rg = await client.callTool({ name: "rg", arguments: { args: ["x"] } });
+    assert.ok(responseText(rg).includes(big));
+
+    const direct = await client.callTool({ name: "git_add", arguments: { paths: ["x"] } });
+    assert.match(responseText(direct), /Full output: C:\/files\/output\.txt/u, "a direct tool's result reaches the model, so it spills");
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test("OpenCode context handoff executes without admitting MCP arguments or results", async () => {
   const order: string[] = [];
   const captured: Array<{ arguments: unknown; result?: ProviderToolResult }> = [];

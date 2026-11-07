@@ -1,5 +1,10 @@
 ## Workbench Tools
 Prefer Workbench tools over shell fallbacks. wb MCP tools also exist as `wb` CLI commands; on repeated failures check `wb --help`.
+<!-- Scripts parse nested results as data, so Workbench never spills them; an agent that returns raw results instead fills
+context up to the provider's native cap. Agents also misread Promise.all results with the Promise.allSettled `.value` shape
+and concluded tools returned nothing; that is a script bug, not a tool limit. -->
+<harness:codex>Workbench tool results reach Code mode scripts whole; return only what the task needs.</harness:codex>
+<harness:opencode>Workbench tool results reach Code mode scripts whole; return only what the task needs.</harness:opencode>
 
 <docs tools="mcp_tools mcp_call mcp_request">
 <!-- User-added MCP servers reach every provider through these wb tools, so agents need to know the tools exist

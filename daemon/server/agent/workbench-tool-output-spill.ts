@@ -65,7 +65,7 @@ function shellStreams(structured: CallToolResult["structuredContent"]) {
 }
 
 /**
- * Only shell results declare an output schema, and code-mode providers read its fields instead of the text, so its streams are bounded in
+ * Only shell results declare an output schema, and models reading structured content see its fields instead of the text, so its streams are bounded in
  * place; any other tool's structured copy would carry the whole output past the preview, and goes. A failed save still answers the call.
  */
 export async function spillToolResult(result: CallToolResult, { save, signal }: SpillOptions): Promise<CallToolResult> {

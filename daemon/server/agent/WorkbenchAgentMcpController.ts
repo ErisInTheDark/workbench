@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchAgentMcpControllerOptions: inject trusted identity resolution, caller audience, cancellation, wait deadlines, hosted-shell approval, and command execution ports.
- * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including any Workbench tool found and run at its current schema on server `wb` of `mcp_tools`/`mcp_call`, with its result kept on request, per-caller audience gates, wait timeouts with non-error timed-out results, the transcript-free user-message acknowledgement for providers that host it, text-only results for providers whose model reads structured content, plus the served tool specs for prompt-cost accounting and their per-audience content fingerprint for prefix staleness.
+ * - default WorkbenchAgentMcpController: one MCP generation's short steps (list, call, finish) for typed wb tools, served through the thin ingress, including any Workbench tool found and run at its current schema on server `wb` of `mcp_tools`/`mcp_call`, with its result kept on request, per-caller audience gates, wait timeouts with non-error timed-out results, the transcript-free user-message acknowledgement for providers that host it, text-only results for providers whose model reads structured content, oversized results spilled except where a code-mode script reads them whole, plus the served tool specs for prompt-cost accounting and their per-audience content fingerprint for prefix staleness.
  */
 import { createHash } from "node:crypto";
 import type http from "node:http";
@@ -248,6 +248,8 @@ const SHELL_STOP_TOOL: Tool = {
   _meta: CODE_MODE_META,
 };
 
+const CODE_MODE_SHELL_TOOLS: ReadonlySet<string> = new Set([WORKBENCH_SHELL_MCP_TOOL_NAME, SHELL_WAIT_TOOL.name, SHELL_STOP_TOOL.name]);
+
 function readClientScope(value: string | null) {
   if (!value) return LEGACY_MCP_CLIENT_SCOPE;
   if (!MCP_CLIENT_SCOPE_PATTERN.test(value)) throw new Error("Workbench MCP client scope is invalid.");
@@ -462,24 +464,31 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     const threadId = async () => (await this.tools(scope.provider).caller(
       ProviderToolMetadataSchema.parse(call.meta ?? {}), call.signal, { clientScope: scope.clientScope },
     )).threadId;
-    return { ...step, result: await this.wireResult(scope, toolName, step.result, threadId, call.signal) };
+    return { ...step, result: await this.wireResult(scope, call.name, toolName, step.result, threadId, call.signal) };
+  }
+
+  private servedInCodeMode(name: string) {
+    return CODE_MODE_SHELL_TOOLS.has(name)
+      || this.listCommands().some(candidate => candidate.mcpCodeModeEligible && getWorkbenchAgentCommandToolName(candidate) === name);
   }
 
   /**
-   * What the model receives, after the transcript recorded the whole result. Oversized results spill, unless the tool's text is the
-   * point. Providers whose model reads structured content instead of text get only the text, which carries every agent-facing line;
-   * the shell declares an output schema, so its structured result stays.
+   * What the caller receives, after the transcript recorded the whole result. Oversized results spill, unless the tool's text is the
+   * point or a code-mode script, not the model, reads it. Providers whose model reads structured content instead of text get only the
+   * text, which carries every agent-facing line; the shell declares an output schema, so its structured result stays.
    */
   private async wireResult(
-    scope: WorkbenchMcpScope, toolName: string, whole: CallToolResult, threadId: () => Promise<string>, signal: AbortSignal,
+    scope: WorkbenchMcpScope, calledName: string, toolName: string, whole: CallToolResult, threadId: () => Promise<string>, signal: AbortSignal,
   ): Promise<CallToolResult> {
-    const fullOutput = this.listCommands().some(candidate => candidate.mcpFullOutput && getWorkbenchAgentCommandToolName(candidate) === toolName);
+    const description = await this.tools(scope.provider).describe();
+    const fullOutput = (description.nestsCodeModeTools && this.servedInCodeMode(calledName))
+      || this.listCommands().some(candidate => candidate.mcpFullOutput && getWorkbenchAgentCommandToolName(candidate) === toolName);
     const result = fullOutput ? whole : await spillToolResult(whole, {
       save: async text => await this.spillToolOutput(await threadId(), text),
       signal,
     });
     if (toolName === WORKBENCH_SHELL_MCP_TOOL_NAME || result.structuredContent === undefined) return result;
-    if (!(await this.tools(scope.provider).describe()).modelReadsStructuredContent) return result;
+    if (!description.modelReadsStructuredContent) return result;
     const { structuredContent: _transcriptOnly, ...text } = result;
     return text;
   }
@@ -648,6 +657,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         ...(this.injectedExecuteCommand ? { execute: this.injectedExecuteCommand } : {}),
         request: prepared.request,
         signal: prepared.signal,
+        calledName: call.name,
         toolName,
         transcript: started.reference,
         unregister: prepared.unregister,
@@ -703,7 +713,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       if (!reference) throw new Error("This call has no thread to save output for.");
       return reference.threadId;
     };
-    return await this.wireResult(scope, call.toolName, finished, threadId, call.signal);
+    return await this.wireResult(scope, call.calledName, call.toolName, finished, threadId, call.signal);
   }
 
   /** The row stays running; only the call answers, with the output so far and the id `shell_wait` collects. */
@@ -762,7 +772,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
       kind: "detached",
       call: {
         collect: { shellId: input.shellId, threadId, command: this.requestRegistry.readBackgroundShellCommand(input.shellId) },
-        signal, toolName: call.name, transcript: started.reference,
+        signal, calledName: call.name, toolName: call.name, transcript: started.reference,
         unregister: registration.unregister,
       },
     };
@@ -842,7 +852,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
     }
     const detached: WorkbenchMcpDetachedCall = {
       ...(this.injectedExecuteShell ? { executeShell: this.injectedExecuteShell } : {}),
-      shell: prepared, signal, toolName: "shell", transcript: started.reference,
+      shell: prepared, signal, calledName: call.name, toolName: "shell", transcript: started.reference,
       unregister: registration.unregister,
       ...(registration.shellQueue ? { shellQueue: registration.shellQueue } : {}),
       // The yield clock starts once the command is admitted, so an approval wait never counts against it; a steer yields at once.

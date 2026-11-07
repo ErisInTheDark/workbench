@@ -71,6 +71,8 @@ export type WorkbenchMcpDetachedCall = {
   yieldSignal?: AbortSignal;
   unlinkCaller?: () => void;
   signal: AbortSignal;
+  /** The tool the client invoked, such as `mcp_call`; `toolName` is the command it ran. */
+  calledName: string;
   toolName: string;
   transcript: object | null;
   unregister: () => void;

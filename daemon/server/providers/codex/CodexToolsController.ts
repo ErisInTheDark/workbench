@@ -67,6 +67,7 @@ export default class CodexToolsController implements WorkbenchProviderTools {
       shellDescription: WORKBENCH_SHELL_TOOL_DESCRIPTION,
       // A code-mode cell yields after its `yield_time_ms` and resumes with `functions.wait`.
       yieldsLongWaits: true,
+      nestsCodeModeTools: true,
     };
   }
 
