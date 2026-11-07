@@ -57,6 +57,7 @@ do not apply timeouts for validation command runs! they own their own timeouts
 2. tests:
 `pnpm test` tests full suite scoped to claims (run this first!)
 `pnpm test -- [<file>...]` tests only the specified files (useful for targeted retests)
+`pnpm test:<network|relay|repo> [--go <binary>]` runs that go sidecar's tests; use when changing `shared/network/native`, `daemon/relay` or `daemon/repo`
 
 3. expensive scenario tests if necessary:
 note: the following two scenario tests take a LONG time, and should be used for FINAL validation
