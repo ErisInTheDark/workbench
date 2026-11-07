@@ -1,14 +1,45 @@
-// No exports. Protect offline directory answers, pre-join name ownership, address families and negative responses.
+// No exports. Protect offline directory answers, pre-join name ownership, address families, negative responses, and
+// reading the tailnet's private nameservers with their reachability.
 package main
 
 import (
 	"context"
 	"errors"
 	"net/netip"
+	"reflect"
 	"testing"
 
 	"github.com/miekg/dns"
+	"tailscale.com/tailcfg"
+	"tailscale.com/types/dnstype"
+	"tailscale.com/types/netmap"
 )
+
+func TestPrivateDNSRoute(t *testing.T) {
+	node := func(address string, online *bool) tailcfg.NodeView {
+		return (&tailcfg.Node{Addresses: []netip.Prefix{netip.MustParsePrefix(address + "/32")}, Online: online}).View()
+	}
+	yes, no := true, false
+	network := &netmap.NetworkMap{
+		SelfNode: node("100.64.0.1", nil),
+		Peers: []tailcfg.NodeView{node("100.64.0.2", &no), node("100.64.0.3", &yes), node("100.64.0.4", nil)},
+		DNS: tailcfg.DNSConfig{Routes: map[string][]*dnstype.Resolver{
+			"ts.net.": {{Addr: "199.247.155.53"}},
+			"wb.inthedark.boo.": {{Addr: "100.64.0.2"}, {Addr: "100.64.0.3:53"}, {Addr: "https://100.64.0.1/dns-query"}, {Addr: "100.64.0.4"}, {Addr: "100.64.0.9"}, {Addr: "100.64.0.2"}, nil},
+		}},
+	}
+	got := privateDNSRoute(network)
+	want := &tailnetDNS{Nameservers: []tailnetNameserver{
+		{Address: "100.64.0.1", Online: &yes}, {Address: "100.64.0.2", Online: &no}, {Address: "100.64.0.3", Online: &yes},
+		{Address: "100.64.0.4", Online: &no}, {Address: "100.64.0.9", Online: nil},
+	}}
+	if !reflect.DeepEqual(got, want) { t.Fatalf("route = %+v, want %+v", got, want) }
+	if got := privateDNSRoute(&netmap.NetworkMap{DNS: tailcfg.DNSConfig{Routes: map[string][]*dnstype.Resolver{"WB.INTHEDARK.BOO": {{Addr: "[fd7a::1]:53"}}}}}); len(got.Nameservers) != 1 || got.Nameservers[0].Address != "fd7a::1" || got.Nameservers[0].Online != nil {
+		t.Fatalf("undotted route = %+v", got)
+	}
+	if got := privateDNSRoute(&netmap.NetworkMap{}); got == nil || len(got.Nameservers) != 0 { t.Fatalf("missing route = %+v", got) }
+	if privateDNSRoute(nil) != nil { t.Fatal("no netmap must report nothing") }
+}
 
 func TestDirectoryDNS(t *testing.T) {
 	members := []networkMember{

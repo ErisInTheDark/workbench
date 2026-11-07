@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -438,6 +439,9 @@ func (node *privateNetwork) run() (result error) {
 				})
 			}
 			if notification.NetMap != nil {
+				if route := privateDNSRoute(notification.NetMap); !reflect.DeepEqual(route, node.snapshot().TailnetDNS) {
+					node.change(func(status *privateStatus) { status.TailnetDNS = route })
+				}
 				select {
 				case directoryRefresh <- struct{}{}:
 				default:

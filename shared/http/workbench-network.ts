@@ -113,6 +113,10 @@ export const WorkbenchNetworkRuntimeSchema = z.object({
     networks: z.array(z.object({ id: z.uuid(), ownerNodeId: nodeId, label }).strict()).max(256).optional(),
     devices: z.array(z.object({ nodeId, name: z.string().max(253), online: z.boolean() }).strict()).max(4096).optional(),
     pendingUpdates: z.array(nodeId).max(256).optional(),
+    /** The tailnet's split-DNS nameservers for private names, as clients resolve them; `online` null when no node owns one. */
+    tailnetDns: z.object({
+      nameservers: z.array(z.object({ address: z.string().min(1).max(256), online: z.boolean().nullable() }).strict()).max(64),
+    }).strict().optional(),
   }).strict(),
 }).strict();
 

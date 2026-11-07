@@ -1,11 +1,13 @@
 /*
  * Default export:
- * - WorkbenchNetworkSettings: app reachability status, any needed setup, Connection, Other devices with certificate download, and Network rules.
+ * - WorkbenchNetworkSettings: app reachability status (including private DNS coverage), any needed setup, Connection, Other devices with certificate download, and Network rules.
  */
 "use client";
 import { useContext, useState } from "react";
 import { workbenchNetworkMode, type WorkbenchNetworkAction } from "workbench-shared/http/workbench-network";
 import { WorkbenchNetworkClientContext, useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
+import { networkDnsCoverage, TAILSCALE_DNS_ADMIN_URL } from "../../workbench/app/network-dns-coverage";
+import WorkbenchLinkButton from "./WorkbenchLinkButton";
 import Disclosure from "../ui/Disclosure";
 import FormSection from "../ui/FormSection";
 import PrimaryButton from "../ui/PrimaryButton";
@@ -55,10 +57,13 @@ function NetworkSettingsContent () {
   const appUrl = rawUrl ? new URL("/launch", rawUrl).href : null;
   // Another device lands on this page, where it can trust the certificate before HTTPS works there.
   const tailnetUrl = status.hostServe.url ? new URL("/@/settings#settings-connection", status.hostServe.url).href : null;
+  const dns = service ? networkDnsCoverage(snapshot) : null;
+  const dnsAttention = Boolean(dns && dns.verdict !== "healthy");
   const attention = service
-    ? !httpsReady && (network.verification.phase === "failed" || status.privateAccess.phase === "failed" || !snapshot.executable.available)
+    ? dnsAttention || !httpsReady && (network.verification.phase === "failed" || status.privateAccess.phase === "failed" || !snapshot.executable.available)
     : mode !== "localhost" && status.hostServe.phase !== "ready";
   const connectionStatus = mode === "localhost" ? "Only this computer"
+    : dnsAttention ? dns!.verdict === "broken" ? "Private names do not resolve" : "Private DNS needs attention"
     : service ? httpsReady ? "HTTPS ready"
       : network.verification.phase === "checking" ? "Checking HTTPS..."
         : attention ? "HTTPS needs attention" : "Setting up HTTPS..."
@@ -101,6 +106,10 @@ function NetworkSettingsContent () {
         Cancel
       </PrimaryButton> : null}
     </div>
+    {dnsAttention ? <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-sm">
+      <p role="alert" className={`m-0 min-w-0 flex-1 ${dns!.verdict === "broken" ? "text-danger" : "text-[color:var(--attention)]"}`}>{dns!.problem}</p>
+      <WorkbenchLinkButton href={TAILSCALE_DNS_ADMIN_URL} target="_blank" rel="noreferrer">Fix in Tailscale DNS<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
+    </div> : null}
     {messages.length || failures.length ? <div className="space-y-1 px-1 text-sm">
       {messages.map(message => <p key={message} className="m-0 text-fg/muted">{message}</p>)}
       {failures.map(message => <p key={message} role="alert" className="m-0 text-danger">{message}</p>)}
