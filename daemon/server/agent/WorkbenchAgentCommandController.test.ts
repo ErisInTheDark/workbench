@@ -1,6 +1,5 @@
 /*
- * Exports:
- * - No production exports; tests cover direct dispatch, caller-scoped store access, claim identity, reload dirt, response adaptation and cancellation.
+ * No exports. Protect direct dispatch, caller-scoped store access, claim identity, reload dirt, response adaptation and cancellation.
  */
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -14,6 +13,7 @@ import { promisify } from "node:util";
 import { NativeThreadIdSchema, WorkbenchThreadIdSchema } from "workbench-shared/workbench/identity";
 
 import WorkbenchTemporaryDirectory from "workbench-shared/WorkbenchTemporaryDirectory";
+import NativeArtifactStage from "workbench-shared/process/NativeArtifactStage";
 import type { WorkbenchDaemonEndpoint } from "workbench-shared/http/workbench-daemon-endpoint";
 import { verifyNativeSidecarArtifact } from "workbench-shared/native/native-sidecar-artifact";
 import { publishDaemonEndpoint } from "workbench-shared/process/workbench-daemon-endpoint";
@@ -135,7 +135,8 @@ test("shell store access crosses HTTP per request rather than inheriting daemon 
   t.after(server.close);
   const dataRoot = path.join(temporary.path, "data");
   await server.publish(dataRoot);
-  const launcher = await verifyNativeSidecarArtifact(path.resolve(import.meta.dirname, "../../.."), WORKBENCH_LAUNCHER_ARTIFACT);
+  const artifact = await verifyNativeSidecarArtifact(path.resolve(import.meta.dirname, "../../.."), WORKBENCH_LAUNCHER_ARTIFACT);
+  const launcher = await new NativeArtifactStage({ runtimeRoot: dataRoot }).stage({ label: "launcher", executable: artifact });
   for (const scenario of [
     { daemon: "", child: "1", action: "get", allowed: true },
     { daemon: "", child: "", action: "get", allowed: false },

@@ -78,6 +78,15 @@ export default class ClaimedProjectTestCommand {
     const deleted = tree.deletedOnDisk.map(target => path.relative(root, target).replaceAll("\\", "/"));
     if (deleted.length) output(`arc tree: other threads deleted these files on disk, so tests can't see your baseline copies: ${deleted.join(", ")}`);
     const environment = await tree.nodeEnvironment({ env, directory: WorkbenchTemporaryDirectory.rootPath });
-    return await new ProjectTestRunner(root, { environment }).run(files);
+    const runner = new ProjectTestRunner(root, { environment });
+    if (tree.isEmpty) return await runner.run(files);
+    const discovered = await runner.discoverTestFiles(files);
+    if (!discovered.length) return await runner.run(files);
+    const visible = discovered.filter(file => tree.exists(file));
+    if (!visible.length) {
+      output("No selected tests exist in the caller's arc tree.");
+      return { exitCode: 0, signal: null };
+    }
+    return await runner.run(visible);
   }
 }

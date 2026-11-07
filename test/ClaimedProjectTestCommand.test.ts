@@ -6,7 +6,39 @@ import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import ClaimedProjectTestCommand from "./ClaimedProjectTestCommand";
+import ProjectTestRunner from "./ProjectTestRunner";
 import { publishDaemonEndpoint } from "../shared/process/workbench-daemon-endpoint";
+
+test("test execution excludes another thread's new tests, including an entirely hidden selection", async t => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const temporary = await WorkbenchTemporaryDirectory.create("claimed-test-hidden-");
+  t.after(() => temporary.dispose());
+  const visible = path.join(temporary.path, "visible.test.ts");
+  const hidden = path.join(temporary.path, "hidden.test.ts");
+  await writeFile(visible, "");
+  await writeFile(hidden, "");
+  const data = path.join(temporary.path, "data");
+  await publishDaemonEndpoint(path.join(data, "daemon/runtime.json"), {
+    version: 1, pid: 1, instanceId: "00000000-0000-4000-8000-000000000001", origin: "http://127.0.0.1:4500",
+  });
+  const relative = path.relative(root, hidden);
+  const runs: string[][] = [];
+  t.mock.method(ProjectTestRunner.prototype, "run", async (files: string[]) => {
+    runs.push(files);
+    return { exitCode: 0, signal: null };
+  });
+  const command = new ClaimedProjectTestCommand(root, {
+    cwd: root, env: { WORKBENCH_DATA_ROOT: data, WORKBENCH_THREAD_ID: "test-thread" }, output: () => {},
+    fetch: async () => Response.json({ repositories: [{
+      repoRoot: root, baseline: "a".repeat(40), held: [{ threadId: "other", paths: [relative] }],
+      contents: { [relative]: null },
+    }] }),
+  });
+  assert.deepEqual(await command.run(["--", visible, hidden]), { exitCode: 0, signal: null });
+  assert.deepEqual(runs, [[visible]]);
+  assert.deepEqual(await command.run(["--", hidden]), { exitCode: 0, signal: null });
+  assert.equal(runs.length, 1, "an empty visible selection must not run the full suite");
+});
 
 test("automatic selection discovers current endpoint publications without inherited origins", async t => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
