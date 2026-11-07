@@ -158,9 +158,9 @@ test("threads on two daemons network only through the app relay and the target's
     return journey;
   };
   try {
-    const b = await IsolatedWorkbench.create(source, deadline, { codexModelEndpoint: fakeB.baseUrl });
+    const b = await IsolatedWorkbench.create(source, deadline, { codexIdentity: false, codexModelEndpoint: fakeB.baseUrl });
     runtimes.push(b);
-    const a = await IsolatedWorkbench.create(source, deadline, { codexModelEndpoint: fakeA.baseUrl });
+    const a = await IsolatedWorkbench.create(source, deadline, { codexIdentity: false, codexModelEndpoint: fakeA.baseUrl });
     runtimes.push(a);
     await b.start([profile], "networking-b");
     a.reachPeers([b.peerDaemon("tower")]);
