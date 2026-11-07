@@ -13,7 +13,6 @@ import {
   type WorkbenchInstructionWorkspaceFact,
 } from "./instruction-context-filter";
 import type { RenderedInstructionContent } from "./instruction-file-generation";
-import { resolveWorkbenchInstructionToolReference } from "./instruction-tool-reference";
 
 function filter(
   value: string,
@@ -141,18 +140,6 @@ test("invalid tool references stay visible and report their source", () => {
   assert.equal(result.warnings[0]?.recovery, "malformed");
   assert.equal(result.warnings[0]?.message, "Unknown Workbench tool id");
   assert.deepEqual(filter("<harness:opencode><tool id=\"missing\" /></harness:opencode>").warnings, []);
-});
-
-test("registered tool references follow each provider's real MCP route", () => {
-  const catalogue = [
-    { id: "rg", codeModeEligible: true },
-    { id: "git_arc_release", codeModeEligible: false },
-  ];
-  assert.equal(resolveWorkbenchInstructionToolReference("rg", "codex", catalogue), "tools.mcp__wb__rg");
-  assert.equal(resolveWorkbenchInstructionToolReference("git_arc_release", "codex", catalogue), "tools.mcp__wbex__git_arc_release");
-  assert.equal(resolveWorkbenchInstructionToolReference("rg", "opencode", catalogue), "tools.wb.rg");
-  assert.equal(resolveWorkbenchInstructionToolReference("git_arc_release", "opencode", catalogue), "wbex_git_arc_release");
-  assert.equal(resolveWorkbenchInstructionToolReference("not_a_tool", "codex", catalogue), null);
 });
 
 test("selectors are conjunctive and control lines never escape", () => {

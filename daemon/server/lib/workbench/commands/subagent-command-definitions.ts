@@ -8,6 +8,7 @@ import {
   WorkbenchSubagentDequeueInputSchema,
   WorkbenchSubagentQueueInputSchema,
 } from "../subagent/subagent-queue-contract";
+import { WORKBENCH_TOOL_REFERENCE_INPUT_DESCRIPTION } from "../instructions/tool-reference-markup";
 import { WorkbenchAgentCommandFlags, WorkbenchCommandArgumentError } from "./workbench-agent-command-arguments";
 import { defineWorkbenchAgentCommand, postWorkbenchAgentCommand } from "./workbench-agent-command-definition";
 
@@ -106,12 +107,13 @@ const create = defineWorkbenchAgentCommand({
   usage: "wb subagent create --profile <profile-id> --name <name> --title <title> --message <message> --user-visible-simple-version <text> [--folder <host>[:<folder>]]",
   inputSchema: z.object({
     folder: folder.optional(),
-    message: requiredText,
+    message: requiredText.describe(WORKBENCH_TOOL_REFERENCE_INPUT_DESCRIPTION),
     name: requiredText,
     profileId: requiredText,
     title: requiredText,
     userVisibleSimpleVersion: requiredText.describe("One or two plain sentences summarising the task for the user, without technical detail."),
   }).strict(),
+  toolReferenceInput: ["message"],
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(args, {
       values: ["--profile", "--name", "--title", "--message", "--user-visible-simple-version", "--folder"],

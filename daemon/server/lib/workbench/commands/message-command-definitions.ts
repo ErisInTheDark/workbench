@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { WorkbenchMessageWaitTargetsSchema } from "workbench-shared/workbench/thread/thread-message";
+import { WORKBENCH_TOOL_REFERENCE_INPUT_DESCRIPTION } from "../instructions/tool-reference-markup";
 
 import { WorkbenchAgentCommandFlags } from "./workbench-agent-command-arguments";
 import {
@@ -14,7 +15,7 @@ import {
 
 const requiredText = z.string().trim().min(1);
 const messageInputSchema = z.object({
-  message: requiredText,
+  message: requiredText.describe(WORKBENCH_TOOL_REFERENCE_INPUT_DESCRIPTION),
   name: requiredText.optional(),
   parent: z.boolean().optional(),
   threadId: requiredText.optional(),
@@ -36,6 +37,7 @@ const message = defineWorkbenchAgentCommand({
   words: ["message", "agent"],
   usage: "wb message agent (--thread <id> | --name <name> | --parent) --message <message> --user-visible-simple-version <text>",
   inputSchema: messageInputSchema,
+  toolReferenceInput: ["message"],
   parseCliArgs(args) {
     const flags = new WorkbenchAgentCommandFlags(args, {
       boolean: ["--parent"],

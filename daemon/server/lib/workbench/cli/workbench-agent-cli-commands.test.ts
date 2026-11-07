@@ -56,7 +56,7 @@ function execFileWithInput(command: string, args: string[], input: string, optio
 const gitArcOptions = { callerThreadId: "thread-1", cwd: "C:/workspace" };
 
 test("message wait admits mixed sender targets through CLI and MCP with a stable invocation identity", async () => {
-  const context = { callerHarness: "codex", callerThreadId: "caller", cwd: "C:/workspace", workbenchOrigin: null, workbenchRoot: false };
+  const context = { callerHarness: "codex", callerThreadId: "caller", cwd: "C:/workspace", knownToolIds: new Set<string>(), workbenchOrigin: null, workbenchRoot: false };
   const parsed = await parseWorkbenchAgentCliCommand([
     "message", "wait", "--thread", "first", "--name", "luna", "--thread", "second",
   ], context);
@@ -118,7 +118,7 @@ test("status selectors preserve equivalent CLI and MCP inputs", async () => {
   const definition = listWorkbenchAgentCommands().find(({ words }) => words.join(" ") === "git arc status");
   assert.ok(definition, "status must be registered for CLI and MCP");
   const mcp = await definition.buildRequestFromJson({ full: ["dirty", "unclaimed-dirt"], threadId: "target-thread" }, {
-    ...gitArcOptions, callerHarness: "codex", workbenchOrigin: null, workbenchRoot: false,
+    ...gitArcOptions, callerHarness: "codex", knownToolIds: new Set(), workbenchOrigin: null, workbenchRoot: false,
   });
   for (const flags of [["--full=dirty,unclaimed-dirt"], ["--full", "dirty,unclaimed-dirt"]]) {
     const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "status", "--thread", "target-thread", ...flags], gitArcOptions);
@@ -220,7 +220,7 @@ test("combined claim CLI preserves addition, removal and adoption as separate ar
 test("bulk claim files and explicit stash choices preserve typed request semantics", async () => {
   const claimsPath = "claims.json";
   const context = {
-    ...gitArcOptions, callerHarness: "codex" as const, cwd: temporaryDirectoryPath, workbenchOrigin: null, workbenchRoot: false,
+    ...gitArcOptions, callerHarness: "codex" as const, cwd: temporaryDirectoryPath, knownToolIds: new Set<string>(), workbenchOrigin: null, workbenchRoot: false,
   };
   await writeFile(path.join(temporaryDirectoryPath, claimsPath), JSON.stringify({
     addPaths: ["new.ts"], adoptPaths: ["dirty.ts"], removePaths: ["old.ts"], roots: [],
@@ -279,7 +279,7 @@ test("plan claim revisions recover removal-only operands when PowerShell consume
 
 test("proposal targeting uses amend for pending or committed content and reword for messages", async () => {
   const propose = listWorkbenchAgentCommands().find(({ words }) => words.join("_") === "git_arc_propose")!;
-  const context = { cwd: "C:/workspace", callerThreadId: "thread-1", callerHarness: "codex" as const, workbenchOrigin: null, workbenchRoot: false };
+  const context = { cwd: "C:/workspace", callerThreadId: "thread-1", callerHarness: "codex" as const, knownToolIds: new Set<string>(), workbenchOrigin: null, workbenchRoot: false };
   const pending = await propose.buildRequestFromJson({
     amend: "pending-id", paths: ["one.ts"],
   }, context);
@@ -1702,7 +1702,7 @@ test("stash commands are argument-free whole-arc operations with conflict guidan
     assert.equal(parsed.request.body?.action, action);
     assert.equal((await parseWorkbenchAgentCliCommand(["git", "arc", word, "one.ts"], gitArcOptions)).kind, "error");
     await assert.rejects(definition.buildRequestFromJson({ paths: ["one.ts"] }, {
-      ...gitArcOptions, callerHarness: "codex", workbenchOrigin: null, workbenchRoot: false,
+      ...gitArcOptions, callerHarness: "codex", knownToolIds: new Set(), workbenchOrigin: null, workbenchRoot: false,
     }));
   }
   const parsed = await parseWorkbenchAgentCliCommand(["git", "arc", "unstash"], gitArcOptions);

@@ -4,7 +4,9 @@ import test from "node:test";
 import { WORKBENCH_TRANSCRIPT_COMMANDS } from "./transcript-command-definitions";
 import type { WorkbenchAgentCommandContext } from "./workbench-agent-command-definition";
 
-const context: WorkbenchAgentCommandContext = { callerHarness: "codex", callerThreadId: "caller", cwd: "C:/repo", workbenchOrigin: null, workbenchRoot: false };
+const context: WorkbenchAgentCommandContext = {
+  callerHarness: "codex", callerThreadId: "caller", cwd: "C:/repo", knownToolIds: new Set(), workbenchOrigin: null, workbenchRoot: false,
+};
 
 function command(action: string) {
   const found = WORKBENCH_TRANSCRIPT_COMMANDS.find(definition => definition.words[1] === action);

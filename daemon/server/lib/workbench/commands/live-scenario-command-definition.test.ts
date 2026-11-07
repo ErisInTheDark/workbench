@@ -11,6 +11,7 @@ const context = {
   callerHarness: "codex",
   callerThreadId: "thread-1",
   cwd: "C:/git/web/workbench",
+  knownToolIds: new Set<string>(),
   workbenchOrigin: "http://127.0.0.1:4500",
   workbenchRoot: false,
 };

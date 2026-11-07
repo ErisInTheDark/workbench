@@ -14,6 +14,7 @@ import { HISTORY_ITEM_KINDS, HISTORY_NARRATIVE_KINDS } from "../../../database/h
 
 import type { DaemonReloadScopeDescriptor } from "workbench-shared/workbench/daemon-reload";
 import { listWorkbenchAgentCommands } from "../commands/workbench-agent-command-registry";
+import { listWorkbenchInstructionTools } from "../instructions/instruction-tool-reference";
 import {
   getWorkbenchAgentCommandToolName,
   isWorkbenchAgentCommandOnMcp,
@@ -439,6 +440,7 @@ export async function parseWorkbenchAgentCliCommand(
       kind: "request",
       request: await matched.definition.buildRequestFromCli(argv.slice(matched.words.length), {
         callerHarness, callerThreadId, cwd, workbenchOrigin, allowStoreRead, workbenchRoot: audience.workbenchRoot,
+        knownToolIds: new Set(listWorkbenchInstructionTools(commands).map(tool => tool.id)),
       }),
     };
   } catch (error) {

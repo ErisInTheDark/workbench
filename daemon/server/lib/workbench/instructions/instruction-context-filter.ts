@@ -17,6 +17,7 @@ import { MODE_AFTER, ModeAfterSchema, ModeIconSchema, type WorkflowMode } from "
 
 import type { WorkbenchHarness } from "workbench-shared/types";
 import type { InstructionSourceSpan, RenderedInstructionContent } from "./instruction-file-generation";
+import { closesMarkdownFence, readMarkdownFence, skipMarkdownCodeSpan, type MarkdownFence } from "./markdown-code";
 
 /** `available` and `setting` are retired: their tags still parse so they strip with a warning instead of leaking into payloads. */
 type SelectorAxis = "available" | "docs" | "else" | "gate" | "harness" | "model" | "proof" | "setting" | "shell" | "role" | "tool" | "workspace" | "wrapper";
@@ -74,7 +75,7 @@ interface SelectorTag {
   line: number;
   start: number;
 }
-interface Fence { include?: boolean; marker: "`" | "~"; size: number }
+interface Fence extends MarkdownFence { include?: boolean }
 
 const SELECTOR_TAG = /<(\/)?(available|harness|model|shell|role|workspace|setting):([^<>]+)>/uy;
 const MODEL_MATCHES_TAG = /<model matches="([^"\n]+)">/uy;
@@ -130,22 +131,7 @@ function pairsWithCloser(opened: SelectorControl, closing: SelectorControl) {
 function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column: number) => void) {
   const tags: SelectorTag[] = [];
   for (let index = 0; index < line.length;) {
-    if (line[index] === "`") {
-      let runEnd = index + 1;
-      while (line[runEnd] === "`") runEnd += 1;
-      let close = runEnd;
-      while (close < line.length) {
-        close = line.indexOf("`", close);
-        if (close < 0) break;
-        let closeEnd = close + 1;
-        while (line[closeEnd] === "`") closeEnd += 1;
-        if (closeEnd - close === runEnd - index) break;
-        close = closeEnd;
-      }
-      if (close >= 0) { index = close + runEnd - index; continue; }
-      index = runEnd;
-      continue;
-    }
+    if (line[index] === "`") { index = skipMarkdownCodeSpan(line, index); continue; }
     if (line[index] !== "<") { index += 1; continue; }
     TOOL_TAG.lastIndex = index;
     const toolMatch = TOOL_TAG.exec(line);
@@ -329,16 +315,6 @@ function scanSelectorTags(line: string, lineIndex: number, onMalformed: (column:
   return tags;
 }
 
-function readFence(line: string): Fence | null {
-  const match = /^(?: {0,3})(`{3,}|~{3,})/u.exec(line);
-  return match?.[1] ? { marker: match[1][0] as Fence["marker"], size: match[1].length } : null;
-}
-
-function closesFence(line: string, fence: Fence) {
-  const marker = fence.marker === "`" ? "`" : "~";
-  return new RegExp(`^(?: {0,3})${marker}{${fence.size},}\\s*$`, "u").test(line);
-}
-
 export function stripWorkbenchInstructionHtmlComments(value: string) {
   const lines = value.split("\n");
   let fence: Fence | null = null;
@@ -371,7 +347,7 @@ export function stripWorkbenchInstructionHtmlComments(value: string) {
     const fragment = `${lineIndex > 0 ? "\n" : ""}${line}`;
     if (fence) {
       output += fragment;
-      if (closesFence(line, fence)) fence = null;
+      if (closesMarkdownFence(line, fence)) fence = null;
       return;
     }
 
@@ -388,7 +364,7 @@ export function stripWorkbenchInstructionHtmlComments(value: string) {
       return;
     }
 
-    const openedFence = readFence(line);
+    const openedFence = readMarkdownFence(line);
     if (openedFence) {
       output += fragment;
       fence = openedFence;
@@ -617,8 +593,8 @@ export function collectWorkbenchInstructionModes(value: string): WorkflowMode[] 
   const modes: WorkflowMode[] = [];
   let fence: Fence | null = null;
   for (const line of stripWorkbenchInstructionHtmlComments(value.replace(/\r\n?/gu, "\n")).split("\n")) {
-    if (fence) { if (closesFence(line, fence)) fence = null; continue; }
-    fence = readFence(line);
+    if (fence) { if (closesMarkdownFence(line, fence)) fence = null; continue; }
+    fence = readMarkdownFence(line);
     if (fence) continue;
     const mode = readModeTag(line.trim());
     if (mode) modes.push(mode);
@@ -632,8 +608,8 @@ export function collectWorkbenchInstructionProofOfWork(value: string): ProofOfWo
   let open: ProofOfWorkChecklist | null = null;
   let fence: Fence | null = null;
   for (const line of stripWorkbenchInstructionHtmlComments(value.replace(/\r\n?/gu, "\n")).split("\n")) {
-    if (fence) { if (closesFence(line, fence)) fence = null; continue; }
-    fence = readFence(line);
+    if (fence) { if (closesMarkdownFence(line, fence)) fence = null; continue; }
+    fence = readMarkdownFence(line);
     if (fence) continue;
     const trimmed = line.trim();
     PROOF_OPEN_TAG.lastIndex = 0;
@@ -682,8 +658,8 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
   let fence: Fence | null = null;
 
   lines.forEach((line, lineIndex) => {
-    if (fence) { if (closesFence(line, fence)) fence = null; return; }
-    const openedFence = readFence(line);
+    if (fence) { if (closesMarkdownFence(line, fence)) fence = null; return; }
+    const openedFence = readMarkdownFence(line);
     if (openedFence) {
       fence = openedFence;
       // A wrapper-level fence would be collapsed into one line, so neutralise the wrappers instead.
@@ -847,10 +823,10 @@ export function filterWorkbenchInstructionContent(value: string | null | undefin
         if (inline) { emit(line); emit("\n"); }
         else push(line);
       }
-      if (closesFence(line, fence)) fence = null;
+      if (closesMarkdownFence(line, fence)) fence = null;
       return;
     }
-    const openedFence = readFence(line);
+    const openedFence = readMarkdownFence(line);
     if (openedFence) {
       const include = included();
       if (include) {

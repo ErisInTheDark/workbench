@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchCoreNode: own the core generation's lifecycle (start, drain, reload handoff, dispose order) and registrations, wiring the
- *   feature clusters under ./core with the provider dispatcher, thread state, thread summaries, the thread busy lease, thread actions, launches, daemon requests,
+ *   feature clusters under ./core with the provider dispatcher (including per-recipient agent message rendering), thread state, thread summaries, the thread busy lease, thread actions, launches, daemon requests,
  *   MCP servers, browse cleanup and the MCP registry's undelivered-message read, project-merge absorption into thread identity and
  *   state, plus supervisor registrations and direct child declarations (including provider runtime installs).
  * Local helpers: construct reloadable modules and the core feature lifecycle.
@@ -72,6 +72,7 @@ import WorkbenchThreadFactsFeature from "./WorkbenchThreadFactsFeature";
 import WorkbenchThreadWorkflowReader from "../thread/WorkbenchThreadWorkflowReader";
 import WorkbenchThreadInstructionPins from "../thread/WorkbenchThreadInstructionPins";
 import WorkbenchThreadInstructionBuilder from "../thread/WorkbenchThreadInstructionBuilder";
+import { hasWorkbenchToolReferences } from "../lib/workbench/instructions/tool-reference-markup";
 import WorkbenchTurnRuntimeFeature, { type WorkbenchCoreTranscript } from "./WorkbenchTurnRuntimeFeature";
 
 const startupDiagnostics = process.env.WORKBENCH_STARTUP_DIAGNOSTICS === "1";
@@ -195,6 +196,11 @@ function createWorkbenchCoreFeature(
     onAgentMessageAdmitted: (threadId, message) => run(
       "messages", owner => { owner.receive(threadId, message); }, "agent message admission",
     ),
+    renderAgentMessage: async (harness, threadId, message, messageContext) => {
+      if (!hasWorkbenchToolReferences(message.message)) return message;
+      const subagent = Boolean(messageContext?.subagentName) || (await lookup.entry(threadId))?.entryKind === "subagent";
+      return { ...message, message: await threadInstructions.renderAgentText(message.message, { harness, subagent }) };
+    },
     holdAgentMessage: async (threadId, message) => await threadActions.holdAgentMessage(threadId, message),
     awaitsQuestionnaireAnswer: async threadId => await interactions.questionnaireSteers.awaitsAnswer(threadId),
     onMessageAdmitted: async admitted => {

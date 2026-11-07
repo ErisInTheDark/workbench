@@ -15,7 +15,7 @@ import type { WorkbenchHarness, WorkbenchLocalCapabilitySettings } from "workben
 import { ProviderKeySchema } from "workbench-shared/workbench/provider/provider-key";
 import { filterWorkbenchInstructionContent, formatWorkbenchInstructionFilterWarning } from "./instruction-context-filter";
 import {
-  resolveWorkbenchInstructionToolReference,
+  resolveWorkbenchToolReference,
   selectWorkbenchInstructionTools,
   servesWorkbenchInstructionTool,
   type WorkbenchInstructionTool,
@@ -100,7 +100,7 @@ export async function createManagedThreadFilter(
       harness: context.harness,
       model: context.model,
       onWarning: warning => process.stderr.write(`${formatWorkbenchInstructionFilterWarning(warning)}\n`),
-      resolveTool: id => resolveWorkbenchInstructionToolReference(id, context.harness, catalogue),
+      resolveTool: id => resolveWorkbenchToolReference(id, context.harness, catalogue)?.name ?? null,
       servesTool: id => servesWorkbenchInstructionTool(id, catalogue),
       shell: process.platform === "win32" ? "pwsh" : "bash",
       sourceSections: value ? [{ content: value, sources }] : undefined,

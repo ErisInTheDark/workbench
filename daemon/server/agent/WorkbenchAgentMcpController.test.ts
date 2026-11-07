@@ -776,7 +776,7 @@ test("the explicit provider owns MCP metadata and supplies WB command identity",
     const definition = listWorkbenchAgentCommands([], "agent").find(definition => definition.words.join("_") === "thread_state")!;
     assert.deepEqual(executed, [await definition.buildRequestFromJson({}, {
       callerHarness: "another-provider", callerThreadId: "wb-caller", cwd: "/trusted",
-      workbenchOrigin: "http://127.0.0.1:4500", workbenchRoot: false,
+      knownToolIds: new Set(), workbenchOrigin: "http://127.0.0.1:4500", workbenchRoot: false,
     })]);
   } finally {
     await client.close();
@@ -929,7 +929,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     const claims = eligible.find(({ words }) => words.join("_") === "git_arc_claims")!;
     const claimRequest = await claims.buildRequestFromJson({
       inherit: true, addPaths: ["-literal.ts"], removePaths: ["old.ts"], adoptPaths: ["dirty.ts"],
-    }, { callerHarness: "codex", callerThreadId: "thread-1", cwd: "C:/authoritative", workbenchOrigin: null, workbenchRoot: false });
+    }, { callerHarness: "codex", callerThreadId: "thread-1", cwd: "C:/authoritative", knownToolIds: new Set(), workbenchOrigin: null, workbenchRoot: false });
     assert.deepEqual(claimRequest.body, {
       action: "arcClaims", inherit: true, addPaths: ["-literal.ts"], removePaths: ["old.ts"], adoptPaths: ["dirty.ts"], roots: [],
       cwd: "C:/authoritative", harness: "codex", threadId: "thread-1",
@@ -973,6 +973,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
         callerHarness: "codex",
         callerThreadId: "thread-1",
         cwd: "C:/authoritative",
+        knownToolIds: new Set(),
         workbenchOrigin: null,
         workbenchRoot: false,
       }), {
@@ -991,6 +992,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       callerHarness: "codex",
       callerThreadId: "thread-1",
       cwd: "C:/authoritative",
+      knownToolIds: new Set(),
       workbenchOrigin: null,
       workbenchRoot: false,
     }), {
@@ -1003,6 +1005,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       callerHarness: "codex",
       callerThreadId: "thread-1",
       cwd: "C:/authoritative",
+      knownToolIds: new Set(),
       workbenchOrigin: null,
       workbenchRoot: false,
     }), {
@@ -1021,6 +1024,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       callerHarness: "codex",
       callerThreadId: "thread-1",
       cwd: "C:/authoritative",
+      knownToolIds: new Set(),
       workbenchOrigin: null,
       workbenchRoot: false,
     }), {
@@ -1043,6 +1047,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
       callerHarness: "codex",
       callerThreadId: "thread-1",
       cwd: "C:/authoritative",
+      knownToolIds: new Set(),
       workbenchOrigin: null,
       workbenchRoot: false,
     }), {
@@ -1054,7 +1059,7 @@ test("lists one typed tool per eligible command and dispatches with trusted thre
     assert.deepEqual((await releaseDefinition.buildRequestFromJson({
       toSubagent: "mira", paths: ["src/one.ts"],
     }, {
-      callerHarness: "codex", callerThreadId: "thread-1", cwd: "C:/authoritative", workbenchOrigin: null, workbenchRoot: false,
+      callerHarness: "codex", callerThreadId: "thread-1", cwd: "C:/authoritative", knownToolIds: new Set(), workbenchOrigin: null, workbenchRoot: false,
     })).body, {
       action: "arcTransferClaims", cwd: "C:/authoritative", harness: "codex", threadId: "thread-1",
       destination: { kind: "subagent", name: "mira" }, paths: ["src/one.ts"],

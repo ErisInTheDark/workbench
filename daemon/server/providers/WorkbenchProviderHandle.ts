@@ -3,7 +3,7 @@
  * - WorkbenchProviderMessageAdmission: one provider-chosen message outcome published after acceptance.
  * - WorkbenchProviderHiddenTurn: a Workbench-started hidden turn and its in-lane supersession check.
  * - WorkbenchProviderNativeLocations: pending native session moves after project merges, and their settlement.
- * - WorkbenchProviderHandleOptions: post-admission hooks, agent-message holds, instruction selection, native relocation and shared message admission policy.
+ * - WorkbenchProviderHandleOptions: post-admission hooks, agent-message rendering and holds, instruction selection, native relocation and shared message admission policy.
  * - default WorkbenchProviderHandle: forward operations through the current definition lease, move a merged thread's native session
  *   before its next turn or compaction, supply thread instruction selections, admit compaction-queue deliveries inside their
  *   compaction's admission, hold agent messages for the user instead of compacting or dropping their held questionnaire, and wake waits
@@ -53,6 +53,10 @@ export interface WorkbenchProviderHandleOptions {
   messageAdmission?: WorkbenchThreadAutoCompactController["run"];
   /** An agent message steered a live turn; its model sees it only at a later input boundary. */
   onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void;
+  /** Before any delivery or hold: the message as its recipient reads it, with tool markup in that harness's own calls. */
+  renderAgentMessage?: (
+    harness: WorkbenchProviderKey, threadId: string, message: WorkbenchAgentMessage, context: WorkbenchMessageContext | undefined,
+  ) => Promise<WorkbenchAgentMessage>;
   /** Inside the thread's admission: keep a held agent message for its user's next running turn. */
   holdAgentMessage?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void>;
   /** Inside the thread's admission: a started turn would drop a questionnaire that only an answer can continue. */
@@ -206,7 +210,9 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
     latestTurn: threadId => this.run(providerRegistrations[this.key], provider => provider.threads.latestTurn(threadId), `${this.key}: threads.latestTurn`),
     admitTurn: (threadId, turnReference) => this.run(providerRegistrations[this.key], provider => provider.threads.admitTurn(threadId, turnReference), `${this.key}: threads.admitTurn`),
     submit: input => this.submitUserMessage(input, { skipAutoCompact: input.skipAutoCompact, expectAutoCompact: input.expectAutoCompact }),
-    messageAgent: async ({ holdForUser, ...input }) => {
+    messageAgent: async ({ holdForUser, ...sent }) => {
+      const message = await this.options.renderAgentMessage?.(this.key, sent.threadId, sent.message, sent.context) ?? sent.message;
+      const input = { ...sent, message };
       const hold = holdForUser && this.options.holdAgentMessage;
       const holdMessage = hold
         ? async (): Promise<WorkbenchAgentMessageResult> => { await hold(input.threadId, input.message); return { kind: "held" }; }

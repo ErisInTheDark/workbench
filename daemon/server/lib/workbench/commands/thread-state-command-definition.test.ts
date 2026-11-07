@@ -7,7 +7,7 @@ import { WORKBENCH_THREAD_STATE_COMMANDS } from "./thread-state-command-definiti
 
 test("CLI and MCP calls dispatch the same thread state change", async () => {
   const command = WORKBENCH_THREAD_STATE_COMMANDS[0];
-  const context = { callerHarness: "codex", callerThreadId: "thread", cwd: ".", workbenchOrigin: null, workbenchRoot: false };
+  const context = { callerHarness: "codex", callerThreadId: "thread", cwd: ".", knownToolIds: new Set<string>(), workbenchOrigin: null, workbenchRoot: false };
   const input = {
     proofs: { "review.coverage": "checked" }, notApplicable: ["review.extra"],
     mode: "Review", status: "completed" as const, processDocuments: [],

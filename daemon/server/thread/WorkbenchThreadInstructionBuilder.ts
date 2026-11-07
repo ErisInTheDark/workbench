@@ -3,13 +3,16 @@
  * - WorkbenchThreadInstructionRequest: what a provider knows about one launch; the builder supplies roots, origin and tools.
  * - WorkbenchThreadInstructionBuilderPorts: project roots, tool catalogue, capabilities, local origin and the thread's pins.
  * - default WorkbenchThreadInstructionBuilder: own building a managed thread's instructions (with its frozen skill list) and activated
- *   skill bodies, pinning what each build delivers, and rebuilding a stored prefix's hash.
+ *   skill bodies, pinning what each build delivers, rendering agent message tool markup for a recipient, and rebuilding a stored prefix's hash.
  */
 import type { WorkbenchLocalCapabilitySettings, WorkbenchProjectRoot } from "workbench-shared/types";
 import type { WorkbenchHarness } from "workbench-shared/types";
 import * as workbenchPromptFiles from "../lib/workbench/instructions/WorkbenchPromptFiles";
 import type { WorkbenchInstructionPrefixContext } from "../lib/workbench/instructions/WorkbenchPromptFiles";
-import type { WorkbenchInstructionTool } from "../lib/workbench/instructions/instruction-tool-reference";
+import {
+  renderWorkbenchToolReferences, selectWorkbenchInstructionTools, type WorkbenchInstructionTool,
+} from "../lib/workbench/instructions/instruction-tool-reference";
+import { readWorkbenchInstructionCapabilities } from "../lib/workbench/instructions/workbench-instruction-mechanics";
 import type WorkbenchThreadInstructionPins from "./WorkbenchThreadInstructionPins";
 
 export interface WorkbenchThreadInstructionRequest {
@@ -64,6 +67,15 @@ export default class WorkbenchThreadInstructionBuilder {
     );
     if (request.threadId) await this.ports.pins.pin(request.threadId, { skills: built.skillLayers });
     return built.catalog;
+  }
+
+  /** Agent message text with its tool markup rendered as calls this recipient can make. */
+  async renderAgentText(text: string, recipient: { harness: WorkbenchHarness; subagent: boolean }) {
+    const [tools, capabilities] = await Promise.all([
+      this.ports.readInstructionTools(),
+      readWorkbenchInstructionCapabilities(() => this.ports.readLocalCapabilities()),
+    ]);
+    return renderWorkbenchToolReferences(text, recipient.harness, selectWorkbenchInstructionTools(tools, recipient, capabilities));
   }
 
   /** The hash a build from a stored input would deliver now; the stored input is rebuilt exactly, never re-resolved. */

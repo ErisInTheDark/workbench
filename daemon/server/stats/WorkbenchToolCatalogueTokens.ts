@@ -7,7 +7,7 @@
 import type { WorkbenchHarness } from "workbench-shared/types";
 import Gpt5TextTokens from "../lib/workbench/commands/gpt-5-text-tokens";
 import { collectWorkbenchInstructionToolDocs } from "../lib/workbench/instructions/instruction-tool-docs";
-import { listWorkbenchInstructionToolFamily, resolveWorkbenchInstructionToolReference, servesWorkbenchInstructionTool, type WorkbenchInstructionTool } from "../lib/workbench/instructions/instruction-tool-reference";
+import { listWorkbenchInstructionToolFamily, resolveWorkbenchToolReference, servesWorkbenchInstructionTool, type WorkbenchInstructionTool } from "../lib/workbench/instructions/instruction-tool-reference";
 
 export interface WorkbenchToolPromptCost {
   readonly docsTokens: number;
@@ -73,7 +73,7 @@ export default class WorkbenchToolCatalogueTokens {
         facts: { workspace: new Set(["project"]) },
         harness,
         model: null,
-        resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, harness, instructionTools),
+        resolveTool: (id) => resolveWorkbenchToolReference(id, harness, instructionTools)?.name ?? null,
         servesTool: (id) => servesWorkbenchInstructionTool(id, instructionTools),
         shell: process.platform === "win32" ? "pwsh" : "bash",
       });

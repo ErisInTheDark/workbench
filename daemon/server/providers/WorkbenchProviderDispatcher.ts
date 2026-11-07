@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - WorkbenchProviderDispatcherOptions: shared message admission, instruction selection, native relocation and post-admission hooks.
+ * - WorkbenchProviderDispatcherOptions: shared message admission and agent-message rendering, instruction selection, native relocation and post-admission hooks.
  * - default WorkbenchProviderDispatcher: obtain reload-safe provider handles with one process-wide steer-wait interruption path.
  */
 import type WorkbenchProvider from "./WorkbenchProvider";
@@ -32,6 +32,7 @@ export default class WorkbenchProviderDispatcher {
       instructionSelection: this.options.instructionSelection,
       messageAdmission: this.options.messageAdmission,
       onAgentMessageAdmitted: this.options.onAgentMessageAdmitted,
+      renderAgentMessage: this.options.renderAgentMessage,
       holdAgentMessage: this.options.holdAgentMessage,
       awaitsQuestionnaireAnswer: this.options.awaitsQuestionnaireAnswer,
       onMessageAdmitted: this.options.onMessageAdmitted,

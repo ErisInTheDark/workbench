@@ -1079,6 +1079,7 @@ export default class WorkbenchAgentMcpController implements WorkbenchMcpToolGene
         callerHarness: caller.harness,
         callerThreadId: caller.threadId,
         cwd,
+        knownToolIds: new Set(this.listInstructionTools().map(tool => tool.id)),
         workbenchRoot,
         workbenchOrigin: this.daemonOrigin,
       });

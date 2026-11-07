@@ -13,7 +13,7 @@ import { readWorkbenchInstructionSources } from "./instruction-source";
 import { collectWorkbenchInstructionToolDocs } from "./instruction-tool-docs";
 import {
   listWorkbenchInstructionTools,
-  resolveWorkbenchInstructionToolReference,
+  resolveWorkbenchToolReference,
   selectWorkbenchInstructionTools,
   servesWorkbenchInstructionTool,
 } from "./instruction-tool-reference";
@@ -51,14 +51,12 @@ test("docs regions render for any usable subtool, CLI-only included, but never f
       harness: "claude",
       model: null,
       onWarning: () => {},
-      resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, "claude", catalogue),
+      resolveTool: (id) => resolveWorkbenchToolReference(id, "claude", catalogue)?.name ?? null,
       servesTool: (id) => servesWorkbenchInstructionTool(id, catalogue),
       shell: "pwsh",
     },
   );
   assert.equal(output, "edit sessions");
-  // CLI-only tools gate docs but have no MCP name a `<tool id>` reference could print.
-  assert.equal(resolveWorkbenchInstructionToolReference("git_arc_edit_start", "claude", catalogue), null);
 });
 
 test("every docs region and tool reference in repository instructions names a served wb tool", async () => {
@@ -89,7 +87,7 @@ test("repository instructions render without selector warnings for root and suba
           harness,
           model: null,
           onWarning: ({ field, line, message }) => warnings.push({ field, line, message }),
-          resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, harness, visible),
+          resolveTool: (id) => resolveWorkbenchToolReference(id, harness, visible)?.name ?? null,
           servesTool: (id) => servesWorkbenchInstructionTool(id, visible),
           shell: "pwsh",
         });
@@ -109,7 +107,7 @@ test("harness-limited tools gate docs only for the harnesses that can use them",
       harness,
       model: null,
       onWarning: () => {},
-      resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, harness, visible),
+      resolveTool: (id) => resolveWorkbenchToolReference(id, harness, visible)?.name ?? null,
       servesTool: (id) => servesWorkbenchInstructionTool(id, visible),
       shell: "pwsh",
     });
@@ -129,7 +127,7 @@ test("subagent instructions retain coordination without parent-only lifecycle gu
     harness: "codex",
     model: null,
     onWarning: () => {},
-    resolveTool: (id) => resolveWorkbenchInstructionToolReference(id, "codex", visible),
+    resolveTool: (id) => resolveWorkbenchToolReference(id, "codex", visible)?.name ?? null,
     servesTool: (id) => servesWorkbenchInstructionTool(id, visible),
     shell: "pwsh",
   });

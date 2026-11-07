@@ -7,7 +7,8 @@
  * - WorkbenchAgentCommandContext/WorkbenchAgentCommandDefinition: invocation context and registry definitions.
  * - WorkbenchCommandAudienceRule: declarative harness, root-only and local-capability gates a definition places on its callers.
  * - WorkbenchLocalCapability: a local capability setting a command can require.
- * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary, refuse root-only input from other callers, and keep capability-gated commands deferred.
+ * - defineWorkbenchAgentCommand: preserve schema inference at the registry boundary, refuse root-only input from other callers and invalid
+ *   tool markup in agent-facing input, and keep capability-gated commands deferred.
  * - getWorkbenchAgentCommandToolName: canonical MCP command name.
  * - isWorkbenchAgentCommandOnMcp: whether the wb MCP server offers a command at all.
  * - getWorkbenchAgentCommand/postWorkbenchAgentCommand/queryWorkbenchAgentCommandPath: request construction.
@@ -17,6 +18,7 @@
 import { z } from "zod";
 import { ProviderKeySchema, type ProviderKey } from "workbench-shared/workbench/provider/provider-key";
 import type { WorkbenchLocalCapabilitySettings } from "workbench-shared/types";
+import { findWorkbenchToolReferenceProblems } from "../instructions/tool-reference-markup";
 
 export type WorkbenchLocalCapability = keyof WorkbenchLocalCapabilitySettings;
 
@@ -75,6 +77,8 @@ export interface WorkbenchAgentCommandContext {
   callerHarness: string;
   callerThreadId: string | null;
   cwd: string;
+  /** Every Workbench tool id this daemon serves; `<tool id>` markup in agent-facing input must name one. */
+  knownToolIds: ReadonlySet<string>;
   /** May use root-only commands and input: a managed thread at the Workbench repository root, or an unmanaged caller. */
   workbenchRoot: boolean;
   workbenchOrigin: string | null;
@@ -171,6 +175,8 @@ interface TypedWorkbenchAgentCommandDefinition<TSchema extends z.ZodType<object>
   parseCliArgs(args: string[]): z.input<TSchema>;
   /** Input fields only Workbench-root callers may set; anyone else setting one is refused. */
   rootOnlyInput?: readonly (keyof z.output<TSchema> & string)[];
+  /** Agent-facing text fields whose `<tool id>` markup must parse and name a known tool before anything is sent. */
+  toolReferenceInput?: readonly (keyof z.output<TSchema> & string)[];
   usage: string;
   workbenchRootUsage?: string;
   words: readonly string[];
@@ -186,6 +192,12 @@ export function defineWorkbenchAgentCommand<TSchema extends z.ZodType<object>>(
     const parsed = definition.inputSchema.parse(input);
     const rootOnly = context.workbenchRoot ? undefined : definition.rootOnlyInput?.find(field => Boolean(parsed[field]));
     if (rootOnly) throw new Error(`${rootOnly} is available only to threads at the Workbench repository root.`);
+    const markupProblems = (definition.toolReferenceInput ?? []).flatMap((field) => {
+      const value: unknown = parsed[field];
+      const problems = typeof value === "string" ? findWorkbenchToolReferenceProblems(value, context.knownToolIds) : [];
+      return problems.map(problem => `${field}: ${problem}`);
+    });
+    if (markupProblems.length) throw new Error(`Invalid tool markup:\n- ${markupProblems.join("\n- ")}`);
     const request = await definition.buildRequest(parsed, context);
     Object.defineProperty(request, "commandName", {
       enumerable: false,
