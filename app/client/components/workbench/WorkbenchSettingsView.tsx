@@ -58,15 +58,17 @@ const appPages: { id: AppPage; label: string; sections: Section[] }[] = [
 ];
 const machinePages: { id: MachinePage; label: string; sections: Section[] }[] = [
   { id: "agents", label: "Agents", sections: [
-    { id: "settings-providers", label: "Providers" },
+    { id: "settings-auto-resume", label: "Auto-resume" },
     { id: "settings-auto-compact", label: "Auto-compact" },
+    { id: "settings-providers", label: "Providers" },
+    { id: "settings-capabilities", label: "Capabilities" },
     { id: "settings-auto-approve", label: "Auto-approve" },
     { id: "settings-mcp-servers", label: "MCP servers" },
-    { id: "settings-agent-network", label: "Network access" },
     { id: "settings-machine-voice", label: "Voice" },
-    { id: "settings-capabilities", label: "Capabilities" },
+    { id: "settings-agent-advanced", label: "Advanced" },
   ] },
   { id: "projects", label: "Projects", sections: [
+    { id: "settings-installation", label: "Installation" },
     { id: "settings-discovery", label: "Discovery" },
     { id: "settings-inaccessible-projects", label: "Inaccessible projects" },
     { id: "settings-folder", label: "Folder" },
@@ -254,14 +256,20 @@ export default function WorkbenchSettingsView({
       </> : null}
       {place.kind === "app" && place.page === "network" ? <WorkbenchNetworkSettings /> : null}
       {place.kind === "machine" && place.page === "agents" ? <>
-        <FormSection id="settings-providers" title="Providers">
-          {withDaemon((client, id) => <WorkbenchProviderSettings key={id} daemon={client} />)}
-        </FormSection>
         <FormSection id="settings-auto-resume" title="Auto-resume">
           {withDaemon((client, id) => <ThreadAutoResumeSettings key={id} daemon={client} />)}
         </FormSection>
         <FormSection id="settings-auto-compact" title="Auto-compact">
           {withDaemon((client, id) => <ThreadAutoCompactSettings key={id} daemon={client} />)}
+        </FormSection>
+        <FormSection id="settings-providers" title="Providers">
+          {withDaemon((client, id) => <WorkbenchProviderSettings key={id} daemon={client} />)}
+        </FormSection>
+        <FormSection id="settings-capabilities" title="Capabilities">
+          {withDaemon((client, id) => <div key={id}>
+            <WorkbenchWindowsSandboxSettings daemon={client} />
+            <WorkbenchRepoPrerequisiteSettings daemon={client} />
+          </div>)}
         </FormSection>
         <FormSection id="settings-auto-approve" title="Auto-approve">
           {withDaemon((client, id) => <WorkbenchOperationsContext.Provider key={id} value={client}>
@@ -274,24 +282,20 @@ export default function WorkbenchSettingsView({
             return location ? [{ id: location.target.projectId, label: project.label, iconProject: project.iconProject }] : [];
           })} />
           : <FormSection id="settings-mcp-servers" title="MCP servers"><Unavailable>This machine is not connected.</Unavailable></FormSection>}
-        <FormSection id="settings-agent-network" title="Network access">
-          {withDaemon((client, id) => <WorkbenchOperationsContext.Provider key={id} value={client}>
-            <SandboxNetworkSettings projectId={null} scope="global" />
-          </WorkbenchOperationsContext.Provider>)}
-        </FormSection>
         {machine?.id === attachedDaemonId ? <FormSection id="settings-machine-voice" title="Voice">
           <VoiceSettings />
         </FormSection> : null}
-        <FormSection id="settings-capabilities" title="Capabilities">
-          {withDaemon((client, id) => <div key={id}>
-            <WorkbenchWindowsSandboxSettings daemon={client} />
+        <FormSection id="settings-agent-advanced" title="Advanced">
+          {withDaemon((client, id) => <WorkbenchOperationsContext.Provider key={id} value={client}>
+            <SandboxNetworkSettings projectId={null} scope="global" />
             <WorkbenchBrowseCapabilitySetting daemon={client} />
-            <WorkbenchRepoPrerequisiteSettings daemon={client} />
-            <WorkbenchInstallationSettings daemon={client} />
-          </div>)}
+          </WorkbenchOperationsContext.Provider>)}
         </FormSection>
       </> : null}
       {place.kind === "machine" && place.page === "projects" ? <>
+        <FormSection id="settings-installation" title="Installation">
+          {withDaemon((client, id) => <WorkbenchInstallationSettings key={id} daemon={client} />)}
+        </FormSection>
         <FormSection id="settings-discovery" title="Discovery">
           {withDaemon((client, id) => <WorkbenchOperationsContext.Provider key={id} value={client}>
             <WorkbenchProjectDiscoverySettings onSaved={() => onGitRootsSaved(id)} />
