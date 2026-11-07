@@ -33,6 +33,7 @@ import WorkbenchSettingsPreferences from "./WorkbenchSettingsPreferences";
 import WorkbenchProjectPreferenceSettings from "./WorkbenchProjectPreferenceSettings";
 import WorkbenchThemeSetting from "./WorkbenchThemeSetting";
 import WorkbenchThreadAnimationSetting from "./WorkbenchThreadAnimationSetting";
+import WorkbenchWindowsSandboxSettings from "./WorkbenchWindowsSandboxSettings";
 import { WorkbenchOperationsContext } from "./WorkbenchWorkspaceContext";
 import ChevronIcon from "./ChevronIcon";
 import { ComputerIcon } from "./workbench-icons";
@@ -283,6 +284,7 @@ export default function WorkbenchSettingsView({
         </FormSection> : null}
         <FormSection id="settings-capabilities" title="Capabilities">
           {withDaemon((client, id) => <div key={id}>
+            <WorkbenchWindowsSandboxSettings daemon={client} />
             <WorkbenchBrowseCapabilitySetting daemon={client} />
             <WorkbenchRepoPrerequisiteSettings daemon={client} />
             <WorkbenchInstallationSettings daemon={client} />

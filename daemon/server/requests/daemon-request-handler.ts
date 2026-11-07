@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WorkbenchDaemonRequestOwners: the owners daemon request handlers call.
- * - WorkbenchBrowseSessionPort/WorkbenchNetworkPort/ProviderRuntimePort/InstallationUpdatePort: ports that register and retire with
- *   their own reload nodes.
+ * - WorkbenchBrowseSessionPort/WorkbenchNetworkPort/ProviderRuntimePort/InstallationUpdatePort/WindowsSandboxPort: ports that
+ *   register and retire with their own reload nodes.
  * - DaemonRequestContext: what one handler receives besides its params.
  * - DaemonHandledMethod/DaemonRequestHandlers/defineDaemonRequestHandlers: the daemon methods this controller's handlers own, and their handler maps.
  * - InvalidParamsError: a request whose params are wrong (JSON-RPC -32602).
@@ -50,6 +50,7 @@ export interface WorkbenchNetworkPort {
 
 export type ProviderRuntimePort = Pick<import("../providers/ProviderRuntimeController").default, "read" | "install">;
 export type InstallationUpdatePort = Pick<import("../runtime/WorkbenchInstallationUpdateController").default, "pull" | "dismissFailure">;
+export type WindowsSandboxPort = Pick<import("../providers/codex/CodexWindowsSandbox").default, "status" | "setUp">;
 
 export interface WorkbenchDaemonRequestOwners {
   autoCompact?: Pick<WorkbenchThreadAutoCompactController, "refreshObserved">;
@@ -94,6 +95,7 @@ export interface DaemonRequestContext {
   signal: AbortSignal;
   installationUpdate(): InstallationUpdatePort | null;
   providerRuntimes(): ProviderRuntimePort | null;
+  windowsSandbox(): WindowsSandboxPort | null;
 }
 
 /** Daemon methods these handlers own; thread actions and Git arc dispatch generically, and voice and repo runtime stay with the socket controller. */

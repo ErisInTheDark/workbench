@@ -1,4 +1,5 @@
 - Prefer provider integrations that reuse the user's existing preferences, credentials, sessions, and other provider-owned state so Workbench and native clients stay synchronized.
+- Workbench owns agent shell execution for every provider; Codex config never steers it, except the Windows sandbox level Codex records after its own setup.
 - Provider executables are pinned to the checkout's SDK versions, never resolved from PATH: Codex ships as a checkout dependency; Claude Code and OpenCode are optional provider runtimes the user installs from Settings. Humans run the same pinned executables through `wb codex|claude|opencode`; managed threads cannot.
 - Provider-specific native behaviour is a `WorkbenchProviderThreads` capability each provider definition implements; core decides when to call it, only through `WorkbenchProviderHandle`, and never reaches into provider internals or branches on provider.
 - Workbench signs providers in and out through each provider's native login mechanism with the user's real environment, so credentials land in the same stores native clients use.

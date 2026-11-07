@@ -13,7 +13,7 @@ const sandboxedRun = (label: string, expensive: boolean): WorkbenchShellRun => (
   kind: "sandboxed", label, expensive,
   request: {
     command: ["sh", "-c", label], cwd: process.cwd(), permissions: { type: "disabled" },
-    windowsSandboxLevel: "disabled", windowsSandboxPrivateDesktop: false, workspaceRoots: [process.cwd()],
+    windowsSandboxLevel: "disabled", workspaceRoots: [process.cwd()],
   },
 });
 

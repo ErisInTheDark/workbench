@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - baselineActiveCodexTranscripts: restore demanded active windows after database replacement.
- * - default CodexBridgeNode: own reloadable Codex bridge code, questionnaire routing, and approval transport while preserving the parent app-server process.
+ * - default CodexBridgeNode: own reloadable Codex bridge code, questionnaire routing, approval transport and Windows sandbox
+ *   setup while preserving the parent app-server process.
  */
 import CodexStdioBridge from "./CodexStdioBridge";
 import CodexProviderObservations from "./CodexProviderObservations";
@@ -11,6 +12,7 @@ import CodexProvider from "./CodexProvider";
 import CodexToolsNode from "./CodexToolsNode";
 import CodexThreadOperations from "./CodexThreadOperations";
 import CodexConfigurationController from "./CodexConfigurationController";
+import CodexWindowsSandbox from "./CodexWindowsSandbox";
 import CodexHealthMonitor from "./CodexHealthMonitor";
 import { log, logError } from "../../process-helpers";
 import WorkbenchCodexMcpGenerationController from "./WorkbenchCodexMcpGenerationController";
@@ -198,6 +200,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       onNotification: (notification, facts) => {
         context.broadcastProviderNotification("codex", notification);
         nativeConfiguration.signIn.observe(notification);
+        windowsSandbox.observe(notification);
         // Workbench core decides unfinished-turn continuation from the observed lifecycle.
         void persist(async () => {
           await build.get("providerObservations").observe("codex", facts);
@@ -281,6 +284,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
       request: (method, params, options) => threadOperations.requestNative(method, params, options),
       warn: message => console.warn(message),
     });
+    const windowsSandbox = new CodexWindowsSandbox({ request: (method, params) => threadOperations.requestNative(method, params) });
+    const unregisterWindowsSandbox = build.get("daemonRequests").registerWindowsSandbox(windowsSandbox);
     const health = new CodexHealthMonitor({
       failureThreshold: 10,
       intervalMs: 60_000,
@@ -351,6 +356,8 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         };
       },
       dispose: async () => {
+        unregisterWindowsSandbox();
+        windowsSandbox.dispose();
         health.dispose();
         generation.abort(new Error("Codex bridge node disposed."));
         await recovery;
@@ -359,14 +366,17 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         await bridge.retireAfterHandoff();
       },
       hasPendingWork: () => bridge.hasPendingWork() || persistence.size > 0,
-      registrations: { codexBridge: bridge, codexThreadOperations: threadOperations, codexNativeConfiguration: nativeConfiguration },
+      registrations: {
+        codexBridge: bridge, codexThreadOperations: threadOperations, codexNativeConfiguration: nativeConfiguration,
+        codexWindowsSandbox: windowsSandbox,
+      },
       start: () => undefined,
     };
   },
   description: "Reload Codex bridge code without restarting the Codex app-server.",
   lifecycle: "handoff",
-  provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration"],
-  requires: ["codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "approvals", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "transcriptReconciliation", "providerObservations", "agentContext"],
+  provides: ["codexBridge", "codexThreadOperations", "codexNativeConfiguration", "codexWindowsSandbox"],
+  requires: ["daemonRequests", "codexAppServer", "codexLifecycle", "codexInstructions", "toolRevision", "codexSandboxNetwork", "database", "approvals", "projectCatalog", "questionnaires", "threadState", "threadIdentity", "transcriptIdentity", "transcript", "transcriptReader", "transcriptReconciliation", "providerObservations", "agentContext"],
   safeAll: true,
   scope: "server:codex",
 });

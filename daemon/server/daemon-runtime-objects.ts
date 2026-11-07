@@ -168,6 +168,7 @@ export interface DaemonRuntimeObjects {
   };
   codexThreadOperations: CodexThreadOperations;
   codexNativeConfiguration: CodexConfigurationController;
+  codexWindowsSandbox: import("./providers/codex/CodexWindowsSandbox").default;
   codexTools: import("./providers/codex/CodexToolsController").default;
   codexExecutor: import("./providers/codex/CodexExecServer").default;
   codexSandboxAcl: import("./providers/codex/CodexSandboxAclController").default;

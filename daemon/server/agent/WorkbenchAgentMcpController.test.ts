@@ -50,7 +50,7 @@ function preparedShell(cwd: string): WorkbenchPreparedShell {
     cwd, shell: "pwsh",
     run: { kind: "sandboxed", label: "test", expensive: false, request: {
       command: ["pwsh", "-Command", "test"], cwd, permissions: { type: "disabled" },
-      windowsSandboxLevel: "disabled", windowsSandboxPrivateDesktop: false, workspaceRoots: [cwd],
+      windowsSandboxLevel: "disabled", workspaceRoots: [cwd],
     } },
   };
 }
@@ -1579,7 +1579,7 @@ test("outside-sandbox shells keep one stream alive through approval and run with
   const release = deferred<void>();
   const run = { kind: "sandboxed" as const, label: "pnpm test", expensive: false, request: {
     command: ["pwsh", "-Command", "pnpm test"], cwd, permissions: { type: "disabled" as const },
-    windowsSandboxLevel: "disabled" as const, windowsSandboxPrivateDesktop: false, workspaceRoots: [cwd],
+    windowsSandboxLevel: "disabled" as const, workspaceRoots: [cwd],
   } };
   const tools: WorkbenchProviderTools = {
     caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd }),
@@ -1661,7 +1661,7 @@ for (const outside of [false, true]) test(`${outside ? "outside-sandbox" : "sand
   const cwd = process.cwd();
   const run = { kind: "sandboxed" as const, label: "pnpm test", expensive: true, request: {
     command: ["pwsh", "-Command", "pnpm test"], cwd, permissions: { type: "disabled" as const },
-    windowsSandboxLevel: "disabled" as const, windowsSandboxPrivateDesktop: false, workspaceRoots: [cwd],
+    windowsSandboxLevel: "disabled" as const, workspaceRoots: [cwd],
   } };
   const tools: WorkbenchProviderTools = {
     caller: async () => ({ harness: "claude", threadId: WorkbenchThreadIdSchema.parse("thread"), cwd }),

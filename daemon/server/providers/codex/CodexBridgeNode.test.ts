@@ -17,6 +17,8 @@ import WorkbenchTranscriptRepository from "../../database/transcript/WorkbenchTr
 import WorkbenchTranscriptReader from "../../transcript/WorkbenchTranscriptReader";
 import WorkbenchAgentContextController from "../../agent/WorkbenchAgentContextController";
 
+const daemonRequests = { registerWindowsSandbox: () => () => undefined };
+
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>((done) => { resolve = done; });
@@ -65,7 +67,7 @@ test("canonical history does not initialise the native bridge", async (t) => {
       readContextUsage: async () => null,
       readMetadata: async () => ({ entry: null, harness: "codex" }),
     }),
-    codexAppServer: parent, toolRevision: { revision: "catalogue" },
+    codexAppServer: parent, daemonRequests, toolRevision: { revision: "catalogue" },
     threadIdentity: fixture.identities.threads, transcriptIdentity: fixture.identities.items,
     threadState: { controller: { getCanonicalThreadEntry: async () => null } },
     database: { readTranscriptContext: async (id: string) => repository.readContext(id), readThreadContextUsage: async () => null },
@@ -104,7 +106,7 @@ test("Codex subagent requests use the reloadable subagent owner", async () => {
     deactivateBridge() {},
   };
   const registrations = {
-    codexAppServer: parent,
+    codexAppServer: parent, daemonRequests,
     projectCatalog: {
       resolveAgentEndpointProjectFromCwd: async () => ({
         cwd: "C:/repo",
@@ -184,6 +186,7 @@ test("managed steering collects steer context through the bridge's direct admiss
       augment: async (request: JsonRpcRequest) => request,
       createThreadResume: (params: object) => ({ method: "thread/resume", params }),
     },
+    daemonRequests,
     toolRevision: { revision: "catalogue" },
     threadIdentity: fixture.identities.threads, transcriptIdentity: fixture.identities.items,
     projectCatalog: { resolveAgentEndpointProjectFromCwd: async () => ({
@@ -259,7 +262,7 @@ for (const scenario of [
       detachBridge: async () => bridge.detachForReload(),
     };
     const registrations = {
-      codexAppServer: parent,
+      codexAppServer: parent, daemonRequests,
       toolRevision: { revision: "catalogue" },
       codexLifecycle: new CodexLifecycleController({
         isShuttingDown: () => false,

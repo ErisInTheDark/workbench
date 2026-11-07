@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - providerDaemonRequests: daemon requests for provider models, context capabilities, account limits, account sign-in, sandbox
- *   networking, provider runtime installs, installation updates and records, and the virtual repository runtime.
+ *   networking, Windows sandbox setup, provider runtime installs, installation updates and records, and the virtual repository runtime.
  */
 import { z } from "zod";
 import type { WorkbenchModelContextCapability } from "../../../types.ts";
@@ -21,6 +21,7 @@ import {
   WorkbenchSandboxNetworkSettingsResponseSchema,
   type WorkbenchSandboxNetworkSettingsResponse, type WorkbenchSandboxNetworkUpdate,
 } from "../../provider/provider-settings.ts";
+import { WindowsSandboxStatusSchema, type WindowsSandboxStatus } from "../../provider/windows-sandbox.ts";
 import { VirtualRepoAvailabilitySchema, type VirtualRepoAvailability } from "../../repo/virtual-repo-contract.ts";
 import { WorkbenchModelContextCapabilitySchema } from "../../thread/thread-profile.ts";
 import { defineDaemonRequest } from "../define-daemon-request.ts";
@@ -41,6 +42,8 @@ export const providerDaemonRequests = {
   "sandbox-network/update": defineDaemonRequest<WorkbenchSandboxNetworkUpdate, WorkbenchSandboxNetworkSettingsResponse>()({
     route: "installation", result: WorkbenchSandboxNetworkSettingsResponseSchema,
   }),
+  "windows-sandbox/read": defineDaemonRequest<object, WindowsSandboxStatus>()({ route: "installation", result: WindowsSandboxStatusSchema }),
+  "windows-sandbox/set-up": defineDaemonRequest<object, WindowsSandboxStatus>()({ route: "installation", result: WindowsSandboxStatusSchema }),
   "provider/account/read": defineDaemonRequest<ProviderAccountRequest, ProviderAccountSnapshot>()({
     route: "installation", result: ProviderAccountSnapshotSchema,
   }),

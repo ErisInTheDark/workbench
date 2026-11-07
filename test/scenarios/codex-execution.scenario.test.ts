@@ -35,9 +35,7 @@ test("native executor enforces workspace writes and reuses Windows private deskt
     };
     const execute = (command: string[], profile = permissions) => executor.execute({
       command, cwd: fixture.project, permissions: profile, workspaceRoots: [fixture.project],
-      windowsSandboxLevel: process.platform === "win32" ? "elevated" : "disabled",
-      windowsSandboxPrivateDesktop: true,
-    }, t.signal);
+      windowsSandboxLevel: process.platform === "win32" ? "elevated" : "disabled",    }, t.signal);
     const allowed = path.join(fixture.project, "allowed.txt");
     const denied = path.join(fixture.root, "denied.txt");
     const write = (file: string) => process.platform === "win32"
@@ -61,9 +59,7 @@ test("native executor enforces workspace writes and reuses Windows private deskt
     const parentScript = `require("node:child_process").spawn(process.execPath,["-e",${JSON.stringify(childScript)}],{stdio:"inherit"});setInterval(()=>{},1000)`;
     const waiting = executor.execute({
       command: [process.execPath, "-e", parentScript], cwd: fixture.project, permissions,
-      workspaceRoots: [fixture.project], windowsSandboxLevel: process.platform === "win32" ? "elevated" : "disabled",
-      windowsSandboxPrivateDesktop: true,
-    }, cancel.signal);
+      workspaceRoots: [fixture.project], windowsSandboxLevel: process.platform === "win32" ? "elevated" : "disabled",    }, cancel.signal);
     const stopped = assert.rejects(waiting, /scenario cancellation/u);
     try {
       await Promise.race([
@@ -158,7 +154,7 @@ test("Linux managed-network commands reach host loopback services over raw TCP t
           ],
         },
       },
-      windowsSandboxLevel: "disabled", windowsSandboxPrivateDesktop: false,
+      windowsSandboxLevel: "disabled",
     }, t.signal);
     // A plain socket client with no proxy awareness, like a database driver or ws client.
     const client = `const s=require("node:net").connect(${port},"127.0.0.1",()=>s.end("raw-ping"));let r="";s.on("data",d=>r+=d);s.on("close",()=>{console.log(r);process.exit(r==="raw-ping"?0:1)});s.on("error",e=>{console.error(e.message);process.exit(2)})`;

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - providerRequestHandlers: daemon handlers for provider models, context capabilities, account limits, account sign-in, sandbox
- *   networking, provider runtime installs, installation updates and installation records.
+ *   networking, Windows sandbox setup, provider runtime installs, installation updates and installation records.
  */
 import type { z } from "zod";
 import {
@@ -33,6 +33,12 @@ function parse<T>(schema: z.ZodType<T>, params: Record<string, unknown>) {
   const parsed = schema.safeParse(params);
   if (!parsed.success) throw new InvalidParamsError("Invalid provider sign-in request.");
   return parsed.data;
+}
+
+function windowsSandbox(context: DaemonRequestContext) {
+  const port = context.windowsSandbox();
+  if (!port) throw new Error("The Windows sandbox is unavailable while Codex reloads.");
+  return port;
 }
 
 function installationUpdate(context: DaemonRequestContext) {
@@ -95,6 +101,8 @@ export const providerRequestHandlers = defineDaemonRequestHandlers({
       : await capability.update({ scope: "project", enabled: input.enabled, projectId: projectId! });
     return { data: [{ ...updated, provider: key }] };
   },
+  "windows-sandbox/read": async (_params, context) => await windowsSandbox(context).status(),
+  "windows-sandbox/set-up": async (_params, context) => await windowsSandbox(context).setUp(),
   "provider/account/read": async (params, context) => {
     parse(ProviderAccountRequestSchema, params);
     return await signIn(params, context).read();

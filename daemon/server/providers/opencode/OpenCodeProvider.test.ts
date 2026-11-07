@@ -18,16 +18,14 @@ async function prepareRestrictedPwsh(context: test.TestContext) {
   const powerShell = workbenchPowerShellExecutable(temporary.path);
   await fs.mkdir(path.dirname(powerShell), { recursive: true });
   await fs.writeFile(powerShell, "fixture");
-  const configurationReads: object[] = [];
+  const levelReads: string[] = [];
   const registrations = {
     openCodeService: {},
     openCodeThreadOperations: {},
     codexExecutor: { execute: async () => { throw new Error("prepared commands run through the exec node"); } },
-    codexThreadOperations: { requestNative: async (method: string, params: object) => {
-      assert.equal(method, "config/read");
-      configurationReads.push(params);
-      return { config: { windows: { sandbox: "elevated", sandbox_private_desktop: false },
-        shell_environment_policy: { inherit: "core" } } };
+    codexWindowsSandbox: { level: async (cwd: string) => {
+      levelReads.push(cwd);
+      return "elevated";
     } },
   };
   const instance = await OpenCodeProvider.create({ dataRootPath: temporary.path } as never, {
@@ -40,15 +38,13 @@ async function prepareRestrictedPwsh(context: test.TestContext) {
   }, new AbortController().signal);
   assert.ok(run.kind === "sandboxed");
   const request: CodexExecRequest = run.request;
-  return { request, powerShell, configurationReads };
+  return { request, powerShell, levelReads };
 }
 
-test("provider execution preserves configured sandbox policy and admitted boundaries", async context => {
-  const { request, configurationReads } = await prepareRestrictedPwsh(context);
-  assert.equal(configurationReads.length, 1);
+test("provider execution uses the daemon's Windows sandbox level and admitted boundaries", async context => {
+  const { request, levelReads } = await prepareRestrictedPwsh(context);
+  assert.deepEqual(levelReads, [process.cwd()]);
   assert.equal(request.windowsSandboxLevel, "elevated");
-  assert.equal(request.windowsSandboxPrivateDesktop, false);
-  assert.equal(request.envPolicy?.inherit, "core");
   assert.ok(request.permissions.type === "managed" && request.permissions.network === "restricted");
 });
 

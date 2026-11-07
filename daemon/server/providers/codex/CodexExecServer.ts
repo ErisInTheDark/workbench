@@ -368,16 +368,14 @@ export default class CodexExecServer {
       const started = this.request(session, "process/start", {
         processId, argv: relay?.argv ?? withExecRootMarker(request.command, platform), cwd: pathToFileURL(request.cwd).href,
         env: { ...request.env, ...relay?.env }, tty: false, arg0: null,
-        envPolicy: request.envPolicy ?? {
-          inherit: "all", ignoreDefaultExcludes: true, exclude: [], set: {}, includeOnly: [],
-        },
+        envPolicy: { inherit: "all", ignoreDefaultExcludes: true, exclude: [], set: {}, includeOnly: [] },
         ...managedNetwork(request.permissions, platform),
         sandbox: {
           permissions: request.permissions,
           cwd: pathToFileURL(request.cwd).href,
           workspaceRoots: request.workspaceRoots.map(root => pathToFileURL(root).href),
           windowsSandboxLevel: request.windowsSandboxLevel,
-          windowsSandboxPrivateDesktop: request.windowsSandboxPrivateDesktop,
+          windowsSandboxPrivateDesktop: true,
           useLegacyLandlock: request.useLegacyLandlock ?? false,
         },
       }).then(response => {

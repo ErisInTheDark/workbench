@@ -13,7 +13,7 @@ function preparedRun(request: WorkbenchAdmittedExecution): WorkbenchShellRun {
     kind: "sandboxed", label: request.command.join(" "), expensive: request.expensive === true,
     request: {
       command: request.command, cwd: request.cwd, permissions: { type: "disabled" },
-      windowsSandboxLevel: "disabled", windowsSandboxPrivateDesktop: false, workspaceRoots: [request.cwd],
+      windowsSandboxLevel: "disabled", workspaceRoots: [request.cwd],
     },
   };
 }

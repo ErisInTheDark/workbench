@@ -71,6 +71,11 @@ class WorkbenchDaemonClient {
     install: (provider: ProviderRuntimeKey) => this.request("provider/runtime/install", { provider }),
   };
 
+  readonly windowsSandbox = {
+    read: () => this.request("windows-sandbox/read", {}),
+    setUp: () => this.request("windows-sandbox/set-up", {}),
+  };
+
   readonly providerAccounts = {
     read: (provider: string) => this.request("provider/account/read", { provider }),
     start: (params: WorkbenchDaemonParams<"provider/account/sign-in/start">) => this.request("provider/account/sign-in/start", params),

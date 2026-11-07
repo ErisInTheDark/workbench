@@ -29,6 +29,7 @@ import {
   type WorkbenchBrowseSessionPort,
   type WorkbenchDaemonRequestOwners,
   type WorkbenchNetworkPort,
+  type WindowsSandboxPort,
 } from "../requests/daemon-request-handler";
 import { networkRequestHandlers } from "../requests/network-handlers";
 import { projectRequestHandlers } from "../requests/project-handlers";
@@ -68,6 +69,7 @@ export default class WorkbenchDaemonRequestController {
   private network: WorkbenchNetworkPort | null = null;
   private readonly installationUpdateRegistrations = new Set<InstallationUpdatePort>();
   private readonly providerRuntimeRegistrations = new Set<ProviderRuntimePort>();
+  private readonly windowsSandboxRegistrations = new Set<WindowsSandboxPort>();
   private readonly context: Omit<DaemonRequestContext, "signal">;
 
   constructor(private readonly owners: WorkbenchDaemonRequestOwners) {
@@ -77,6 +79,7 @@ export default class WorkbenchDaemonRequestController {
       network: () => this.network,
       installationUpdate: () => [...this.installationUpdateRegistrations].at(-1) ?? null,
       providerRuntimes: () => [...this.providerRuntimeRegistrations].at(-1) ?? null,
+      windowsSandbox: () => [...this.windowsSandboxRegistrations].at(-1) ?? null,
     };
   }
 
@@ -90,6 +93,10 @@ export default class WorkbenchDaemonRequestController {
   registerProviderRuntimes(port: ProviderRuntimePort) {
     this.providerRuntimeRegistrations.add(port);
     return () => { this.providerRuntimeRegistrations.delete(port); };
+  }
+  registerWindowsSandbox(port: WindowsSandboxPort) {
+    this.windowsSandboxRegistrations.add(port);
+    return () => { this.windowsSandboxRegistrations.delete(port); };
   }
 
   /** `signal` aborts when the caller cancels; Git arc requests stop their work, other handlers finish regardless. */

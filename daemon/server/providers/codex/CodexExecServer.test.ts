@@ -68,7 +68,7 @@ function fixture(autoInitialize: boolean | NodeJS.Platform = true, relayBroker?:
   });
   const request: CodexExecRequest = {
     command: ["test"], cwd: process.cwd(), permissions: { type: "disabled" },
-    workspaceRoots: [process.cwd()], windowsSandboxLevel: "elevated", windowsSandboxPrivateDesktop: true,
+    workspaceRoots: [process.cwd()], windowsSandboxLevel: "elevated",
   };
   return {
     owner, get child() { return child; }, send, next, nextWhere, reply, reject, event, finish, request, errors, releaseGrace,

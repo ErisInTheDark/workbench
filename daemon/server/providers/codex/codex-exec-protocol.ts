@@ -42,16 +42,8 @@ export interface CodexExecRequest {
   command: string[];
   cwd: string;
   env?: Record<string, string>;
-  envPolicy?: {
-    inherit: "all" | "core" | "none";
-    ignoreDefaultExcludes: boolean;
-    exclude: string[];
-    set: Record<string, string>;
-    includeOnly: string[];
-  };
   permissions: CodexExecPermission;
   windowsSandboxLevel: "disabled" | "restricted-token" | "elevated";
-  windowsSandboxPrivateDesktop: boolean;
   workspaceRoots: string[];
   useLegacyLandlock?: boolean;
   timeoutMs?: number;
