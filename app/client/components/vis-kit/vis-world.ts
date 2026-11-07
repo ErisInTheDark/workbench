@@ -2,8 +2,8 @@
  * Exports:
  * - VisWorldInput: a declarative fake workspace for vis mockups: devices, projects with folders per device, and git facts.
  * - VisWorldPayload: one observation payload as the app server would publish it, minus its subscription envelope.
- * - default VisWorld: resolve an input into stable ids, answer workspace queries with schema-shaped payloads, and name
- *   folders and routes for the vis file.
+ * - default VisWorld: resolve an input into stable ids, answer workspace queries and daemon commands with schema-shaped
+ *   payloads, and name folders and daemons for the vis file. Wrap real components in VisProviders to feed them.
  */
 import { createEmptyWorkbenchClientStateRows } from "workbench-shared/state/workbench-client-state";
 import appStateReleases from "workbench-shared/state/workbench-app-state-releases";
@@ -13,14 +13,13 @@ import {
   DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema,
   type DaemonId, type LogicalProjectId, type ProjectId,
 } from "workbench-shared/workbench/identity";
-import { createProjectSelectionRoute } from "workbench-shared/workbench/navigation/workbench-route";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
-import WorkbenchProjectNavigation from "../../workbench/navigation/workbench-project-navigation";
 import type { WorkspaceObservation, WorkspaceProjects, WorkspaceQuery } from "workbench-shared/workbench/workspace/workspace-observation";
 
 export interface VisWorldInput {
-  daemons: Array<{ id: string; hostname?: string; asleep?: boolean }>;
+  /** `roots` are its project discovery folders; `dirs` are extra plain folders the folder picker lists. */
+  daemons: Array<{ id: string; hostname?: string; asleep?: boolean; roots?: string[]; dirs?: string[] }>;
   projects: Array<{
     name: string;
     /** Network origin; omitted projects key by their first folder's path, like origin-less repositories. */
@@ -119,16 +118,10 @@ export default class VisWorld {
     return { daemonId: folder.daemon.id, projectId: folder.projectId };
   }
 
-  /** The href of a folder's git view, or its project home, addressed exactly as the app's navigation spells it. */
-  href(key: string, view: "git" | "project" = "git") {
-    const folder = this.folder(key);
-    const location = this.location(key);
-    const navigation = new WorkbenchProjectNavigation(
-      this.folders.map(item => item.option), [], this.projects().projects);
-    const selection = createProjectSelectionRoute([folder.logicalProjectId]);
-    const href = navigation.href(view === "git" ? navigation.gitRoute(selection, location) : navigation.withFolder(selection, location));
-    if (!href) throw new Error(`Vis world cannot address ${key}.`);
-    return href;
+  daemonId(name: string) {
+    const daemon = this.daemons.find(item => item.name === name);
+    if (!daemon) throw new Error(`Vis world has no daemon ${name}.`);
+    return daemon.id;
   }
 
   /** The payload for a query, or null when the world does not model it. */
@@ -205,10 +198,28 @@ export default class VisWorld {
     }
   }
 
-  /** A daemon command's result, or null when the world does not model it. `location` is the folder a folder command targets. */
-  command(method: string, location: ProjectLocationReference | null): object | null {
+  /**
+   * A daemon command's result, or null when the world does not model it. `location` is the folder a folder command
+   * targets; `daemonId` the installation an installation command targets.
+   */
+  command(method: string, params: Record<string, unknown>, location: ProjectLocationReference | null, daemonId: string | null): object | null {
+    const daemon = this.daemons.find(item => item.id === (location?.daemonId ?? daemonId));
     switch (method) {
       case "voice/configuration/read": return { selection: null };
+      case "project/discovery-settings/read": return daemon ? { paths: this.roots(daemon) } : null;
+      case "project/folders/list": {
+        if (!daemon || typeof params.path !== "string") return null;
+        const parent = params.path.replace(/\/+$/u, "") || "/";
+        const prefix = parent === "/" ? "/" : `${parent}/`;
+        const repositories = new Set(this.folders.filter(folder => folder.daemon.id === daemon.id).map(folder => folder.input.path));
+        const known = [...repositories, ...this.input.daemons.find(item => item.id === daemon.name)?.dirs ?? []];
+        const names = [...new Set(known.filter(path => path.startsWith(prefix)).map(path => path.slice(prefix.length).split("/")[0]!))]
+          .filter(Boolean).sort();
+        return {
+          path: parent, parentPath: parent === "/" ? null : parent.slice(0, parent.lastIndexOf("/")) || "/", truncated: false,
+          entries: names.map(name => ({ name, path: `${prefix}${name}`, isGitRepository: repositories.has(`${prefix}${name}`) })),
+        };
+      }
       case "git/working-tree/read": {
         const folder = location ? this.at(location) : null;
         return folder ? { errors: [], repositories: [{
@@ -227,6 +238,10 @@ export default class VisWorld {
       schemaVersion: Math.max(...Object.values(appStateReleases).map(release => release.version)),
       rows: createEmptyWorkbenchClientStateRows(),
     };
+  }
+
+  private roots(daemon: Folder["daemon"]) {
+    return this.input.daemons.find(item => item.id === daemon.name)?.roots ?? ["/git"];
   }
 
   private at(location: ProjectLocationReference) {

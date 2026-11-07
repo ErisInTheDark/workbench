@@ -43,6 +43,8 @@ export interface WorkbenchClientStateControllerOptions {
   browserStateId?: string;
   fetcher?: typeof fetch;
   mode?: "workspace" | "memory";
+  /** Memory mode only: the app-state schema its records may use; without it every schema-gated feature stays off. */
+  schemaVersion?: number;
   workspace?: WorkbenchWorkspaceClient;
 }
 
@@ -100,6 +102,10 @@ export default class WorkbenchClientStateController {
     this.#browserStateId = options.browserStateId;
     this.#workspace = options.workspace ?? null;
     this.#mode = options.mode ?? (options.workspace ? "workspace" : "memory");
+    if (this.#mode === "memory" && options.schemaVersion !== undefined) {
+      this.#schemaVersion = options.schemaVersion;
+      this.#snapshot = { ...this.#snapshot, schemaVersion: options.schemaVersion };
+    }
     const fetcher = options.fetcher ?? globalThis.fetch;
     this.#fetcher = (input, init) => fetcher.call(globalThis, input, init);
   }

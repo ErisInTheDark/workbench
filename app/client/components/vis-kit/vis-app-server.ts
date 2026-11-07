@@ -25,6 +25,8 @@ export default class VisAppServer {
 
   constructor(private readonly socket: WorkspaceTestSocket, private readonly world: VisWorld) {
     this.stop = socket.onRequest(request => { void this.answer(request); });
+    // The socket may open before the server attaches; answer what it already sent.
+    for (const request of socket.sent) void this.answer(request);
   }
 
   /** Requests the world could not answer, as `method` or `workspace/observe kind`, each listed once. */
@@ -65,7 +67,8 @@ export default class VisAppServer {
       }
       case "workspace/command": {
         const scope = request.params.scope;
-        const result = this.world.command(request.params.method, scope?.kind === "folder" ? scope.location : null);
+        const result = this.world.command(request.params.method, request.params.params,
+          scope?.kind === "folder" ? scope.location : null, scope?.kind === "installation" ? scope.daemonId ?? null : null);
         return result ? this.socket.reply(request, result) : this.miss(request, `workspace/command ${request.params.method}`);
       }
       case "app/state/mutate": return this.socket.reply(request, this.world.appState(++this.appStateRevision));

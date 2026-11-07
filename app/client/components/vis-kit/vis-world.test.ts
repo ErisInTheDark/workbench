@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { WorkingTreeReadSchema } from "workbench-shared/workbench/git/working-tree-contracts";
+import { ProjectFolderListSchema } from "workbench-shared/workbench/project/project-creation";
 import { VoiceConfigurationSchema } from "workbench-shared/workbench/voice/voice-session-contract";
 import { conformWorkspaceObservation } from "workbench-shared/workbench/workspace/workspace-observation-conformance";
 import type { WorkspaceQuery } from "workbench-shared/workbench/workspace/workspace-observation";
@@ -50,9 +51,13 @@ test("every modelled payload passes observation conformance without repairs", ()
 });
 
 test("modelled commands return their daemon results' shapes", () => {
-  assert.ok(WorkingTreeReadSchema.safeParse(world.command("git/working-tree/read", desk)).success);
-  assert.ok(VoiceConfigurationSchema.safeParse(world.command("voice/configuration/read", null)).success);
-  assert.equal(world.command("git/working-tree/read", null), null);
+  const deskId = world.daemonId("desk");
+  assert.ok(WorkingTreeReadSchema.safeParse(world.command("git/working-tree/read", {}, desk, null)).success);
+  assert.ok(VoiceConfigurationSchema.safeParse(world.command("voice/configuration/read", {}, null, deskId)).success);
+  assert.equal(world.command("git/working-tree/read", {}, null, deskId), null);
+  const listing = ProjectFolderListSchema.parse(world.command("project/folders/list", { path: "/git" }, null, deskId));
+  assert.deepEqual(listing.entries.map(entry => [entry.name, entry.isGitRepository]), [["wb", true]]);
+  assert.equal(listing.parentPath, "/");
 });
 
 test("peer rows mirror declared sync, asleep devices and other branches from both sides", () => {

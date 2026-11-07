@@ -47,6 +47,9 @@ CRITICAL INSTRUCTION EDITING RULES:
 ### Client building
 workbench automatically compiles client typescript+tailwind (no reload necessary!), but does not publish them to existing tabs via HMR. when using /browse you must refresh the page in order to see your changes
 
+### Vis mockups
+`app/client/components/vis-kit`: `Options`/`Option`/`useVisState` for tabs; wrap real components in `VisProviders` with a `VisWorld` of fake devices, folders and git facts. Extend `vis-world.ts` until its "not modelled" strip is empty
+
 ### Allowed Validation
 do not apply timeouts for validation command runs! they own their own timeouts
 <!-- Agents read "or propose the fix" as permission to file feedback instead of fixing, and treated scenario output that overflowed tool limits as outside "test output", so they redirected it to a file. Naming every validation command, "oversized", and in-task ownership closes both routes. -->

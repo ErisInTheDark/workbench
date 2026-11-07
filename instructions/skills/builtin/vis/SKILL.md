@@ -35,7 +35,7 @@ real interactions were gone and drift was invisible. Making the real component r
 auto exception exists because users often want that untangling done quickly so the mockup can proceed. -->
 - **Hard rule: render real components; never redraw them.** Copying a component's markup or class names, or drawing its menus or tooltips pinned open, is a failure. Users must be able to press, hover and drag the real thing.
 - Real components: find where the live app renders them; pass fake data through their real data seams. Fake `useSyncExternalStore` stores must return stable snapshots.
-- Workbench product UI: render `VisWorkbenchApp` from `app/client/components/vis-kit` with a `VisWorld` and `world.href(folder)`; the real shell boots on a fake app server. Its strip names every query or command the world lacks: extend `vis-world.ts` until it is empty. These pages exceed 1 MB, so the user taps load once.
+- Project instructions may name its mockup helpers (fake data providers, option tabs); use them.
 - Real component unusable in a mockup (prop drilling, context only one parent provides): fix the real component so it renders, as a briefed change. Never work around it in the vis file.
 - The user may invoke the `auto` skill to skip approval for exactly those component fixes. That autonomy ends when the mockup stage ends; later work needs normal approval.
 - New UI under test: build it from the same real primitives its surface uses, placed inside the real surface.
@@ -53,7 +53,6 @@ unsandboxed, so they never saw it. Pages now load from a dedicated vis origin th
   - Workbench UI: `Disclosure`, `MarkdownRender`, `IconButton`, `PrimaryButton`, `RadioRow`, `Tooltip`, `PressDragMenu`, `PressDragSlider`, `StepSlider`, `OptionCards`/`OptionCard`, `FormSection`, `Tabs`/`Tab`, `ShareList`, `Sparkline`, `StreamChart`, `LineChart`, `Skeleton`, all icons (`XIcon`, ...), `SvgIcon size? mode?="stroke"|"fill" viewBox?` for other icons (children = paths)
   - state: `useVisState(id, initial)`
 - Transcript (`workbench/kit/thread`): `ThreadPreview items matchers? components?`, real Workbench transcript from render-lab shorthand items (command strings, `{ type: "userMessage" | "agentMessage", text }`, `{ type: "mcpToolCall", server, tool, arguments, result?, status?, error? }`); pass a skill's matcher files and components to preview its MCP calls. Your screenshots/snapshots show every card and step open; the user's view stays collapsed like the app
-- Project context (Workbench): `Options`, `Option`, `useVisState` from `app/client/components/vis-kit`.
 
 ## Show options
 
@@ -88,7 +87,7 @@ iterating without wiping the user's picks, and lets the agent read picks without
 - `wb vis screenshot <path>`: full-page image of current render, sent to you; user sees it only inside that call's row. `wb vis snapshot <path>`: accessibility tree.
 - Both run in the session's headless Browse session (`vis-…`, 870px square: vis panel's widest) with the user's synced state, opened with the vis, stopped when it ends. Clicks there change nothing.
 - Blank render means a runtime error: wrap frames in an error boundary that prints it. A blank page with no boundary output means a module-level throw: move fixture setup into a component.
-- Before handoff: harness strip empty; every section visibly differs from its neighbours under every option.
+- Before handoff: every section visibly differs from its neighbours under every option.
 - Fix layout, content or styling gaps, then check again.
 
 ## Iterate and end
