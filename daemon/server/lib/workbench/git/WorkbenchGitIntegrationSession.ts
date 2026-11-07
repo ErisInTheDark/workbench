@@ -335,9 +335,6 @@ export default class WorkbenchGitIntegrationSession {
       const tracked = carried.filter(file => before.get(file));
       await repository.restorePaths(session.oldHead, tracked);
       for (const file of carried.filter(file => !before.get(file))) await fs.rm(path.join(repository.root, ...file.split("/")), { force: true });
-      // Restored files keep stale index stat data, which read-tree treats as dirty until refreshed.
-      await repository.clearOrphanedIndexLock();
-      await repository.run(["update-index", "-q", "--refresh"]);
     }
     let applied: Awaited<ReturnType<WorkbenchGitIntegration["apply"]>>;
     try {

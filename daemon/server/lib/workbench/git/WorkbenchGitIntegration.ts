@@ -3,7 +3,7 @@
  * - default WorkbenchGitIntegration: prepare fast-forward, merge or protected replay in memory and publish atomically
  *   with affected Workbench refs; report whether local commits may be replayed.
  * - WorkbenchGitIntegrationPlan: one prepared integration (current, fastForward, replay, merge or blocked) with its counts.
- * - listDirtyPaths: every dirty or untracked worktree path, rename sources included.
+ * - listDirtyPaths: every dirty or untracked worktree path, rename sources included, ignoring content-identical stat dirt.
  */
 import GitArcHistoryRewriter, { type GitArcHistoryRewritePlan } from "./GitArcHistoryRewriter";
 import GitArcPublishState from "./GitArcPublishState";
@@ -30,17 +30,19 @@ export type WorkbenchGitIntegrationPlan = PlanFacts & (
   }
 );
 
-/** Every dirty or untracked path, rename sources included, in one porcelain read. */
+/** Every dirty or untracked path, rename sources included; worktree-only stat dirt with unchanged content is clean. */
 export async function listDirtyPaths(repository: WorkbenchGitRepository) {
-  return dirtyPaths(await repository.run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]));
+  const status = await repository.run(["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+  return dirtyPaths(status, new Set(await repository.listStatOnlyDirtyPaths()));
 }
 
-function dirtyPaths(status: string) {
+function dirtyPaths(status: string, statOnly: ReadonlySet<string>) {
   const entries = status.split("\0");
   const paths: string[] = [];
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index];
     if (!entry) continue;
+    if (entry.startsWith(" M ") && statOnly.has(entry.slice(3))) continue;
     paths.push(entry.slice(3));
     // Porcelain -z writes destination first and source as a second NUL record.
     if (/[RC]/u.test(entry.slice(0, 2))) {

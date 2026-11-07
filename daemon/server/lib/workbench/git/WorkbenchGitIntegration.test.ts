@@ -1,4 +1,4 @@
-/* Exports: none; real Git tests protect integration ancestry, dirty work, published history and publication rollback. */
+/* Exports: none; real Git tests protect integration ancestry, dirty work, line-ending-only stat dirt, published history and publication rollback. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
@@ -90,6 +90,41 @@ test("merge refuses incoming dirty overlap without changing local files", async 
   assert.deepEqual(plan.kind === "blocked" && plan.conflicts, ["incoming.txt"]);
   assert.equal(await f.git("rev-parse", "HEAD"), f.local);
   assert.equal(await fs.readFile(path.join(f.root, "incoming.txt"), "utf8"), "my unsaved work\n");
+});
+
+/** HEAD at `incoming`, with `next` one commit ahead rewriting base.txt, so a fast-forward replaces base.txt. */
+async function behindOnBase(f: Awaited<ReturnType<typeof fixture>>) {
+  await f.git("reset", "--hard", f.incoming);
+  await fs.writeFile(path.join(f.root, "base.txt"), "next\n");
+  await f.git("commit", "-am", "next");
+  const next = await f.git("rev-parse", "HEAD");
+  await f.git("reset", "--hard", f.incoming);
+  return next;
+}
+
+test("a line-ending-only rewrite under autocrlf neither blocks nor breaks an overlapping fast-forward", async t => {
+  const f = await fixture(t);
+  await f.git("config", "core.autocrlf", "true");
+  const next = await behindOnBase(f);
+  // Checked out as CRLF; a tool rewriting it as LF changes its size but not its normalised content.
+  await fs.writeFile(path.join(f.root, "base.txt"), "base\n");
+  assert.equal(await f.status(), "M base.txt");
+  assert.equal(await f.git("diff", "--name-only"), "");
+  const plan = await f.integration.prepare(next);
+  assert.equal(plan.kind, "fastForward");
+  await f.integration.apply(plan);
+  assert.equal(await f.git("rev-parse", "HEAD"), next);
+  assert.equal(await f.status(), "");
+});
+
+test("a real CRLF rewrite without autocrlf still blocks overlapping incoming work", async t => {
+  const f = await fixture(t);
+  const next = await behindOnBase(f);
+  await fs.writeFile(path.join(f.root, "base.txt"), "base\r\n");
+  const plan = await f.integration.prepare(next);
+  assert.equal(plan.kind, "blocked");
+  assert.deepEqual(plan.kind === "blocked" && plan.conflicts, ["base.txt"]);
+  assert.equal(await fs.readFile(path.join(f.root, "base.txt"), "utf8"), "base\r\n");
 });
 
 test("failed ref publication restores the worktree and index to the original HEAD", async t => {

@@ -17,8 +17,9 @@
  * buildFileChanges/buildChangeTotals/buildFileChangeSummaries list changed files in-process, then diff them in pathspec batches
  * that fit the command line, with at most four Git processes in flight. listIgnoredWorktreePaths walks wholly-ignored
  * folders itself so oversized ignored scopes fail fast. Git children never take optional index locks;
- * real-index writers (resetMixedPaths, writeIndexTree, restorePaths, restoreWorktree, checkoutTreeTransition) first clear
- * provably orphaned locks; checkoutTreeTransition moves index and worktree between two commits' trees like a checkout.
+ * real-index writers (resetMixedPaths, writeIndexTree, restorePaths, restoreWorktree, refreshStaleIndexStat, checkoutTreeTransition)
+ * first clear provably orphaned locks; checkoutTreeTransition moves index and worktree between two commits' trees like a checkout,
+ * after refreshStaleIndexStat re-records stale stat for listStatOnlyDirtyPaths (content-identical, e.g. line-ending-only rewrites).
  * Machine worktrees run Git against their internal Git dir; their whole-worktree reads cover tracked files only,
  * oversized scope sets batch pathspecs instead of walking the machine, and scopes inside nested repositories are walked
  * and staged by Workbench (machine-git-boundaries) because Git stops at their `.git`. Machine links and junctions are
@@ -1334,10 +1335,32 @@ export default class WorkbenchGitRepository {
   }
 
   /**
+   * Tracked paths whose index stat is stale while their filtered content still matches the index. A tool rewriting a
+   * file with other line endings under autocrlf changes its size, which Git reports as modified without re-hashing.
+   */
+  async listStatOnlyDirtyPaths() {
+    const statDirty = parseNullPaths(await this.run(["diff-files", "--name-only", "-z"]));
+    if (!statDirty.length) return [];
+    // Porcelain diff re-hashes stat-dirty files and omits those whose content matches.
+    const changed = new Set(parseNullPaths(await this.run(["diff", "--name-only", "-z", "--ignore-submodules=none"])));
+    return statDirty.filter(file => !changed.has(file));
+  }
+
+  /** Re-record index stat for stat-only dirty paths; their blobs stay identical. */
+  async refreshStaleIndexStat() {
+    const stale = await this.listStatOnlyDirtyPaths();
+    if (!stale.length) return;
+    await this.clearOrphanedIndexLock();
+    await this.runWithInput(["-c", "core.safecrlf=false", "update-index", "-z", "--stdin"], `${stale.join("\0")}\0`);
+  }
+
+  /**
    * Move the real index and worktree from one commit's tree to another's, touching only paths that differ.
-   * Git refuses before writing when a differing path is dirty or an untracked file would be overwritten.
+   * Git refuses before writing when a differing path is dirty or an untracked file would be overwritten; stat-only
+   * dirt is refreshed first so it never counts.
    */
   async checkoutTreeTransition(from: string, to: string) {
+    await this.refreshStaleIndexStat();
     await this.clearOrphanedIndexLock();
     await this.run(["read-tree", "-m", "-u", this.normalizeCommit(from), this.normalizeCommit(to)]);
   }
