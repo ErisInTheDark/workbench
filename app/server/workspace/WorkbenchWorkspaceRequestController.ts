@@ -1007,8 +1007,10 @@ export default class WorkbenchWorkspaceRequestController {
         const runtime = value?.runtime ?? {};
         // A thread networked with a daemon this app cannot reach shows only its summary; its detail stays out of this app.
         const root = value?.data?.entries.find(entry => entry.entryKind === "thread");
-        const missing = root && this.options.reach ? ThreadNetworkAccess.missing(ThreadNetworkAccess.daemonIds(
-          runtime[root.identity.threadId]?.networkHistory ?? []), this.options.reach()) : [];
+        const history = root ? runtime[root.identity.threadId]?.networkHistory ?? [] : [];
+        if (this.options.reach) this.options.sources.recognise(history.map(entry => entry.target));
+        const missing = root && this.options.reach
+          ? ThreadNetworkAccess.missing(ThreadNetworkAccess.daemonIds(history), this.options.reach()) : [];
         if (missing.length) {
           this.update(interest, { kind: "thread", owner, phase: "failed", failure: this.restrictedMessage(missing), data: null, runtime: {} });
           return;

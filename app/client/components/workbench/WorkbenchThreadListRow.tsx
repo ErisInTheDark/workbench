@@ -123,7 +123,7 @@ export default function WorkbenchThreadListRow({
   const attentionLabel = useThread.attention(entry && entry.entryKind !== "draft" ? entry.identity.threadId : null);
   const networkDaemonIds = useThread.summary(entry && entry.entryKind !== "draft" ? entry.identity.threadId : null)?.summary.facts.networkDaemonIds;
   const { reach, hostname } = useNetworkReach();
-  // A thread networked with daemons this app cannot reach shows its summary row only; the app refuses its detail anyway.
+  // A thread networked with daemons this app cannot reach still opens, into its summary-only view; the app refuses its detail.
   const missingDaemons = ThreadNetworkAccess.missing(networkDaemonIds, reach);
   const activeDragPayload = useWorkbenchDrag.activePayload();
   const { threadKey, projectId: entryProjectId } = listEntry;
@@ -152,7 +152,7 @@ export default function WorkbenchThreadListRow({
 
   const logicalProject = qualified && ctx.logicalProjects?.find(item => item.id === qualified.logicalProjectId);
   const sourceProjectId = qualified?.location.projectId ?? ProjectIdSchema.parse(entryProjectId);
-  const href = missingDaemons.length ? undefined : ctx.getThreadHref ? ctx.getThreadHref(target, sourceProjectId) : ctx.projectHref(qualified
+  const href = ctx.getThreadHref ? ctx.getThreadHref(target, sourceProjectId) : ctx.projectHref(qualified
     ? target.kind === "provider"
       ? createLogicalExistingThreadRoute(null, target)
       : createLogicalThreadRoute(null, qualified.logicalProjectId, qualified.location, target)

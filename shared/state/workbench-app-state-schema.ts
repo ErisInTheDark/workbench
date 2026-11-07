@@ -1717,6 +1717,18 @@ const projectAliasesHistory = defineTableHistory({
   })],
 });
 
+const knownDaemons = defineTable("known_daemons", {
+  daemon_id: text().primaryKey(),
+  peer_node_id: text().notNull(),
+  hostname: text().notNull(),
+}, table => ({ constraints: [unique([table.peer_node_id])] }));
+const knownDaemonsHistory = defineTableHistory({
+  current: knownDaemons,
+  versions: [tableVersion({
+    schemaVersion: appStateReleases.knownDaemons.version, table: knownDaemons, migration: createTable(knownDaemons),
+  })],
+});
+
 const histories = [
   ...workbenchNetworkHistory(appStateReleases.privateNetworking.version, appStateReleases.networkModes.version, appStateReleases.networkGroups.version),
   workbenchHarnessesHistory,
@@ -1725,6 +1737,7 @@ const histories = [
   appStateMetadataHistory,
   daemonRegistrationsHistory,
   projectAliasesHistory,
+  knownDaemonsHistory,
   lastLaunchTargetHistory,
   lastProjectSelectionsHistory,
   lastProjectSelectionProjectsHistory,
@@ -1781,6 +1794,7 @@ export const appStateTables = Object.freeze({
   composerDraftImageContent: composerDraftImageContentHistory.current,
   questionnaireDraftImageContent: questionnaireDraftImageContentHistory.current,
   projectAliases: projectAliasesHistory.current,
+  knownDaemons: knownDaemonsHistory.current,
   workbenchHarnesses: workbenchHarnessesHistory.current,
   appStateMetadata: appStateMetadataHistory.current,
   daemonRegistrations: daemonRegistrationsHistory.current,

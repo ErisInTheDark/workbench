@@ -169,6 +169,11 @@ export default class WorkbenchNetworkController {
     };
   }
 
+  /** The host node of the network member labelled `label`, the name its daemons are shown by. */
+  memberPeer(label: string) {
+    return this.configurationValue?.members.find(member => member.label === label)?.hostNodeId ?? null;
+  }
+
   private displayHostname(hostNodeId: string | null | undefined, fallback: string) {
     if (!hostNodeId) return fallback;
     return this.configurationValue?.members.find(member => member.hostNodeId === hostNodeId)?.label ?? fallback;

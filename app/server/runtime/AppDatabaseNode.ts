@@ -11,6 +11,7 @@ import type { AppProcessContext } from "./app-process-context.ts";
 import type { AppRuntimeObjects } from "./app-runtime-objects.ts";
 import AppStateNode from "./AppStateNode.ts";
 import AppNetworkNode from "./AppNetworkNode.ts";
+import AppWorkspaceNode from "./AppWorkspaceNode.ts";
 
 interface AppDatabaseReloadState {
   checkpointPath: string | null;
@@ -20,7 +21,7 @@ interface AppDatabaseReloadState {
 
 export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never>()({
   access: "operator",
-  children: [AppStateNode, AppNetworkNode],
+  children: [AppStateNode, AppNetworkNode, AppWorkspaceNode],
   create: (context, build) => {
     const database = context.createDatabase(WorkbenchAppStateRepository);
     database.configureDiagnostics((level, message) => {

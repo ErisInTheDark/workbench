@@ -100,8 +100,9 @@ async function fixture(context: TestContext, canProject: () => boolean = () => t
           origin: "http://100.80.0.2:52739",
           endpoints: { httpOrigin: "http://100.80.0.2:52739", secureOrigin: null },
         }] } }),
-      canAccessPeer: () => true, subscribe: () => () => {},
+      canAccessPeer: () => true, memberPeer: () => null, subscribe: () => () => {},
     },
+    knownDaemons: { read: () => [], remember: () => {} },
     warn: message => warnings.push(message),
     createSource: descriptor => new WorkbenchDaemonSource(descriptor, {
       warn: message => warnings.push(message),
@@ -322,8 +323,9 @@ test("real app sockets share daemon interests, route mutations and isolate a hel
           identity: { protocol: 1, daemonId: b, hostname: "b", state: "ready", wakeEnabled: true },
           origin: daemonB.origin, endpoints: { httpOrigin: daemonB.origin, secureOrigin: null },
         }] } }),
-      canAccessPeer: () => true, subscribe: () => () => {},
+      canAccessPeer: () => true, memberPeer: () => null, subscribe: () => () => {},
     },
+    knownDaemons: { read: () => [], remember: () => {} },
     warn: message => warnings.push(message),
   });
   const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn: message => warnings.push(message) });

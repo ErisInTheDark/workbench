@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - WorkbenchAppStateRepositoryOptions: app-state data root, database path, and clock seams.
- * - default WorkbenchAppStateRepository: own app-state SQLite recovery, connection, prepared statements, transactions, and local registration.
+ * - default WorkbenchAppStateRepository: own app-state SQLite recovery, connection, prepared statements, transactions, local registration
+ *   and remembered daemon identities.
  */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -35,6 +36,7 @@ import type { WorkbenchProjectAlias } from "workbench-shared/types";
 import { DaemonIdSchema, ProjectIdSchema } from "workbench-shared/workbench/identity";
 import { composeProjectAliases } from "workbench-shared/workbench/project/project-aliases";
 import resolveWorkbenchDataRoot from "workbench-shared/workbench-data-root";
+import type { KnownDaemon } from "../workspace/WorkbenchDaemonSources";
 
 const MAX_CACHED_STATEMENTS = 256;
 
@@ -203,6 +205,23 @@ export default class WorkbenchAppStateRepository {
     ]);
     this.#daemonRegistrationId = nextId;
     return nextId;
+  }
+
+  readKnownDaemons(): KnownDaemon[] {
+    return this.query(selectRows(appStateTables.knownDaemons)).map(row => ({
+      daemonId: DaemonIdSchema.parse(row.daemon_id), peerNodeId: row.peer_node_id, hostname: row.hostname,
+    }));
+  }
+
+  /** Replaces whatever this app remembered for the daemon or its peer; app-server memory, so no browser revision. */
+  rememberDaemon(daemon: KnownDaemon) {
+    this.executeTransaction([
+      deleteRows(appStateTables.knownDaemons, { daemon_id: daemon.daemonId }),
+      deleteRows(appStateTables.knownDaemons, { peer_node_id: daemon.peerNodeId }),
+      insertRow(appStateTables.knownDaemons, {
+        daemon_id: daemon.daemonId, peer_node_id: daemon.peerNodeId, hostname: daemon.hostname,
+      }),
+    ]);
   }
 
   readProjectAliases(daemonRegistrationId = this.daemonRegistrationId): WorkbenchProjectAlias[] {

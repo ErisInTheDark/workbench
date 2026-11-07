@@ -362,8 +362,8 @@ async function fixture(
   const presentation = new WorkbenchPresentationController(repository);
   const sources = new WorkbenchDaemonSources({ network: {
     daemonSources: () => ({ current: false, attached: null, localOrigin: null, discovery: { refreshing: true, peers: [] } }),
-    canAccessPeer: () => null, subscribe: () => () => {},
-  }, warn: () => {} });
+    canAccessPeer: () => null, memberPeer: () => null, subscribe: () => () => {},
+  }, knownDaemons: { read: () => [], remember: () => {} }, warn: () => {} });
   const warnings: string[] = [];
   const workspace = new WorkbenchWorkspaceController({ sources, presentation, warn: message => warnings.push(message) });
   const threads = new WorkbenchWorkspaceThreads({ sources, presentation, warn: message => warnings.push(message) });

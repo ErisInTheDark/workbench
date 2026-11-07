@@ -31,8 +31,10 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
     // The relay answers through the sources it is built from, so their requests reach it once it exists.
     let agentRelay: WorkbenchAgentRelay | null = null;
     const relayStarting = (): never => { throw new Error("The app relay is starting."); };
+    const database = build.get("database");
     const sources = new WorkbenchDaemonSources({
       network: build.get("network"), warn, traffic: socketTraffic,
+      knownDaemons: { read: () => database.readKnownDaemons(), remember: daemon => database.rememberDaemon(daemon) },
       relay: {
         answer: async (source, request, accept) => await (agentRelay ?? relayStarting()).answer(source, request, accept),
         presence: (source, standby) => (agentRelay ?? relayStarting()).presence(source, standby),
@@ -108,7 +110,7 @@ export default ReloadableNode.define<AppProcessContext, AppRuntimeObjects, never
   description: "Reload app-owned daemon connections, workspace queries and semantic operations.",
   lifecycle: "handoff",
   provides: ["sources", "socketTraffic", "workspace", "workspaceThreads", "threadPlacements", "workspaceDrafts", "gitPeers", "presentationImport", "agentRelay"],
-  requires: ["network", "presentation", "logger"],
+  requires: ["database", "network", "presentation", "logger"],
   safeAll: false,
   scope: "client:workspace",
 });

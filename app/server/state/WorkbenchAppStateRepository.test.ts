@@ -18,6 +18,7 @@ import { applyWorkbenchDatabaseSchema } from "workbench-shared/database/schema/s
 import WorkbenchAppStateRepository from "./WorkbenchAppStateRepository.ts";
 import { appStateSchema, appStateTables } from "workbench-shared/state/workbench-app-state-schema";
 import { preserveWorkbenchDatabaseBackup } from "workbench-shared/database/workbench-database-migration";
+import { DaemonIdSchema } from "workbench-shared/workbench/identity";
 
 async function temporaryDatabase(context: TestContext) {
   const temporary = await WorkbenchTemporaryDirectory.create("workbench-app-state-");
@@ -348,6 +349,24 @@ test("the local daemon registration remains stable across app restarts", async (
   await second.close();
 
   assert.equal(secondId, firstId);
+});
+
+test("remembered daemons survive restarts and a peer or daemon keeps only its newest identity", async context => {
+  const databasePath = await temporaryDatabase(context);
+  const daemonA = DaemonIdSchema.parse("4f29787d-5a30-4c4c-9d1f-224913a3468c");
+  const daemonB = DaemonIdSchema.parse("502902c0-9512-40be-bb06-c65d86ef2029");
+  const first = new WorkbenchAppStateRepository({ databasePath });
+  await first.start();
+  first.rememberDaemon({ daemonId: daemonA, peerNodeId: "velvet-node", hostname: "velvet" });
+  first.rememberDaemon({ daemonId: daemonB, peerNodeId: "velvet-node", hostname: "velvet" });
+  first.rememberDaemon({ daemonId: daemonB, peerNodeId: "moved-node", hostname: "moved" });
+  await first.close();
+
+  const second = new WorkbenchAppStateRepository({ databasePath });
+  await second.start();
+  try {
+    assert.deepEqual(second.readKnownDaemons(), [{ daemonId: daemonB, peerNodeId: "moved-node", hostname: "moved" }]);
+  } finally { await second.close(); }
 });
 
 for (const rejectCheckpoint of [false, true]) {
