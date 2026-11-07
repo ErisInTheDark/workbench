@@ -1,6 +1,6 @@
 /*
- * Test-only exports:
- * - WorkspaceTestSocket: controllable transport edge with real app protocol decoding.
+ * Exports, shared by client tests and the vis app harness:
+ * - WorkspaceTestSocket: controllable transport edge with real app protocol decoding; `onRequest` hears every request sent.
  * - createWorkspaceClientFixture: production app/workspace clients with explicit socket readiness and release graces.
  */
 import { WorkbenchAppRpcRequestSchema, type WorkbenchAppRpcRequest } from "workbench-shared/http/workbench-app-rpc";
@@ -29,8 +29,15 @@ export class WorkspaceTestSocket extends EventTarget {
     this.dispatchEvent(new Event("close"));
   }
   send(value: string) {
-    this.sent.push(WorkbenchAppRpcRequestSchema.parse(JSON.parse(value)));
+    const request = WorkbenchAppRpcRequestSchema.parse(JSON.parse(value));
+    this.sent.push(request);
     for (const listener of [...this.waiting]) listener();
+    for (const listener of [...this.requestListeners]) listener(request);
+  }
+  private readonly requestListeners = new Set<(request: WorkbenchAppRpcRequest) => void>();
+  onRequest(listener: (request: WorkbenchAppRpcRequest) => void) {
+    this.requestListeners.add(listener);
+    return () => { this.requestListeners.delete(listener); };
   }
   request<Method extends WorkbenchAppRpcRequest["method"]>(method: Method, after = 0,
     accept: (request: Extract<WorkbenchAppRpcRequest, { method: Method }>) => boolean = () => true):

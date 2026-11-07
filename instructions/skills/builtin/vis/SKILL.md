@@ -29,7 +29,16 @@ Project context without needed `.wb.json` command fails with a clear error: conf
 ## Build it
 
 - Prefer `.tsx` default export. Kit context: import from `"workbench/kit"` plus React and relative files only. Project context: import project files as its build allows.
-- Real components: find where the live app renders them; pass fake data. Provide required contexts with fake values; if a context is private, reuse that component's markup and class names. Fake `useSyncExternalStore` stores must return stable snapshots.
+<!-- Agents met contexts or prop drilling they could not satisfy and redrew the component from copied class names, or
+drew its menus and tooltips "pinned open" from surface classes. Those mockups looked plausible but were not the product:
+real interactions were gone and drift was invisible. Making the real component renderable is the intended fix; the
+auto exception exists because users often want that untangling done quickly so the mockup can proceed. -->
+- **Hard rule: render real components; never redraw them.** Copying a component's markup or class names, or drawing its menus or tooltips pinned open, is a failure. Users must be able to press, hover and drag the real thing.
+- Real components: find where the live app renders them; pass fake data through their real data seams. Fake `useSyncExternalStore` stores must return stable snapshots.
+- Workbench product UI: render `VisWorkbenchApp` from `app/client/components/vis-kit` with a `VisWorld` and `world.href(folder)`; the real shell boots on a fake app server. Its strip names every query or command the world lacks: extend `vis-world.ts` until it is empty. These pages exceed 1 MB, so the user taps load once.
+- Real component unusable in a mockup (prop drilling, context only one parent provides): fix the real component so it renders, as a briefed change. Never work around it in the vis file.
+- The user may invoke the `auto` skill to skip approval for exactly those component fixes. That autonomy ends when the mockup stage ends; later work needs normal approval.
+- New UI under test: build it from the same real primitives its surface uses, placed inside the real surface.
 - Style with Tailwind classes; both contexts compile them. Theme tokens: `text-text`, `text-fg/muted`, `bg-fg/5`, `border-fg/10`; support light and dark.
 - Frame height follows page content: no viewport-height sizing (`h-screen`, `min-h-screen`, `100vh`). Leave page background transparent.
 - `.html`/`.svg`: add `<link rel="workbench-css">` in `<head>` for project CSS.
@@ -51,10 +60,15 @@ unsandboxed, so they never saw it. Pages now load from a dedicated vis origin th
 <!-- Agents invented their own layouts for "pick between options": side-by-side grids squashed every preview to a column,
 one tab per component hid the comparison, and send buttons made users answer twice. These three shapes cover every case;
 naming them stops the improvising. -->
+<!-- Agents also split one design into independent tab sets (layout × entry × destination) whose combinations
+contradicted each other, left per-story tab sets unlinked so each section showed a different design, and repeated the
+same resting preview under every story with only the caption changed. Users could not compare anything. -->
 **Hard rule: alternatives are always tabs, one full-size preview at a time.**
 
 - One thing, 2-5 alternatives: one `Options` set. Previews real, not placeholder boxes.
-- Several similar things, each with alternatives: list the things one after another down the page, each with its own `Options`. Never grid alternatives side by side; never make the things themselves tabs.
+- Several similar things, each with alternatives: list the things one after another down the page, each with its own `Options`. Same designs judged across things (stories, screens, states): give those `Options` one shared `id`, so picking a design anywhere switches every section. Never grid alternatives side by side; never make the things themselves tabs.
+- Each option is one complete design. Never split a design into separate tab sets whose combinations can conflict.
+- Each section shows a distinct real state of its thing, reached through fake data, route or the user's own interaction. Same preview with another caption is a failure; drop sections that would not differ.
 - Outer tabs (an `Options` around the page) only for genuinely separate mockups or states (empty, error, held key).
 - Tell user in chat what differs between options.
 
@@ -73,7 +87,8 @@ iterating without wiping the user's picks, and lets the agent read picks without
 
 - `wb vis screenshot <path>`: full-page image of current render, sent to you; user sees it only inside that call's row. `wb vis snapshot <path>`: accessibility tree.
 - Both run in the session's headless Browse session (`vis-…`, 870px square: vis panel's widest) with the user's synced state, opened with the vis, stopped when it ends. Clicks there change nothing.
-- Blank render means a runtime error: wrap frames in an error boundary that prints it.
+- Blank render means a runtime error: wrap frames in an error boundary that prints it. A blank page with no boundary output means a module-level throw: move fixture setup into a component.
+- Before handoff: harness strip empty; every section visibly differs from its neighbours under every option.
 - Fix layout, content or styling gaps, then check again.
 
 ## Iterate and end
