@@ -974,16 +974,18 @@ export default class WorkbenchGitCheckpointController {
       const claims = ownership.activeClaims;
       const savedPaths = current?.savedStash?.paths ?? (current?.phase === "stashed" ? current.claimedPaths : []);
       const dirt = await repository.listAllChangedPaths(head, tree);
-      const dirtPaths = new GitArcPathSet(dirt);
+      const baseline = claims.length ? await this.stack(repository).sealedBaseline(current, head) : null;
+      const work = baseline ? await repository.listAllChangedPaths(baseline, tree) : dirt;
+      const workPaths = new GitArcPathSet(work);
       const lifecycle = current?.phase === "plan" ? current.retainedArc : current;
       const { proposedPaths, status: proposals } = await this.proposals.readStatusProposals({ ...input, threadId: owner?.threadId ?? input.threadId },
         lifecycle?.proposalIds ?? (current?.proposalId ? [current.proposalId] : []), repository, inspection);
       const proposed = new Set(proposedPaths);
-      const unproposedDirt = new GitArcPathSet(dirt.filter(file => !proposed.has(file)));
+      const unproposedWork = new GitArcPathSet(work.filter(file => !proposed.has(file)));
       const status: GitArcStatus = {
         ...proposals,
-        dirtyClaims: claims.filter(claim => unproposedDirt.overlaps(claim)),
-        cleanClaims: claims.filter(claim => !dirtPaths.overlaps(claim)),
+        dirtyClaims: claims.filter(claim => unproposedWork.overlaps(claim)),
+        cleanClaims: claims.filter(claim => !workPaths.overlaps(claim)),
         baselineClaims: ownership.baselineClaims,
         stashedClaims: savedPaths,
         unclaimedDirt: listGitArcUnclaimedPaths(repository, dirt, entries),

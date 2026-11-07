@@ -533,4 +533,10 @@ test("stacking keeps a parent's proposal committable through a plan-selected rel
   assert.ok(JSON.stringify(parent.stacked).includes(proposal.proposalId), "the sealed proposal survives on the parent");
   await controller.startArc({ cwd, threadId: "child" });
   assert.deepEqual((await controller.readScope({ cwd, threadId: "child" }))?.claimedPaths, ["one.txt"]);
+  const inherited = await controller.readStatus({ cwd, threadId: "child" });
+  assert.deepEqual([inherited.dirtyClaims, inherited.cleanClaims], [[], ["one.txt"]],
+    "sealed parent content the child inherits is its baseline, not its work");
+  await fs.writeFile(path.join(cwd, "one.txt"), "child edit\n");
+  const edited = await controller.readStatus({ cwd, threadId: "child" });
+  assert.deepEqual([edited.dirtyClaims, edited.cleanClaims], [["one.txt"], []]);
 });

@@ -1,6 +1,6 @@
 /*
  * Exports:
- * - default GitArcStackController: own stack layer tips, chain reads, baseline tips, a subagent's inherited tips, rebases onto HEAD, arc drift, seal/reopen operations (sealing amendments as fresh commits, moving following children) and checks that layer changes spare other threads' held work.
+ * - default GitArcStackController: own stack layer tips, chain reads, baseline tips and the sealed baseline they shape, a subagent's inherited tips, rebases onto HEAD, arc drift, seal/reopen operations (sealing amendments as fresh commits, moving following children) and checks that layer changes spare other threads' held work.
  * - GitArcPreparedStackRevision: atomic ref and commit updates for one chain rebase.
  * - GitArcStackLayer: one readable stack tip with its sealed layer facts.
  * - GitArcStackStatusResolver: derived proposal status supplied by the proposal owner.
@@ -338,6 +338,21 @@ export default class GitArcStackController {
     return checkpoint.parent && await this.repository.allAncestors(landings, checkpoint.parent)
       ? null
       : { commit: entry.stackTip, pending: false };
+  }
+
+  /**
+   * HEAD with the sealed layers `entry` builds on, or null when none shape its baseline. Pending tips always do; a landed
+   * tip needs a live arc's checkpoint to say whether it has been passed.
+   */
+  async sealedBaseline(entry: GitArcRegistryEntry | undefined, head: string | null) {
+    if (!entry?.stackTip) return null;
+    const arc = entry.phase === "plan" ? entry.retainedArc : entry;
+    const live = arc && arc.phase !== "resolved" ? arc : null;
+    const parent = live
+      ? (await this.store().readCheckpoint(entry.harness as GitArcHarness, entry.threadId, live.checkpointCommit)).parent
+      : null;
+    const tip = await this.baselineTip(entry, { parent });
+    return tip && (live || tip.pending) ? await this.sealedTree(head, tip.commit) : null;
   }
 
   /** Claimed-path drift for an arc, measured from its baseline tip when one still applies; returns that tip too. */

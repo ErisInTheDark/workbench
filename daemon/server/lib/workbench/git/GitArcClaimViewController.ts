@@ -19,7 +19,6 @@ import { type GitArcHarness, normalizeThreadId } from "workbench-shared/workbenc
 import GitArcPathSet from "workbench-shared/workbench/git/GitArcPathSet";
 import GitArcRegistry, { getGitArcLiveClaimPaths, type GitArcRegistryEntry } from "./GitArcRegistry";
 import GitArcStackController from "./GitArcStackController";
-import GitCheckpointStore from "./GitCheckpointStore";
 import GitObjectReadSession from "./GitObjectReadSession";
 import WorkbenchGitRepository, { GIT_SYMLINK_MODE } from "./WorkbenchGitRepository";
 import { passthroughGitArcThreadIdentityResolver, type GitArcThreadIdentityResolver } from "./git-arc-thread-identity";
@@ -225,21 +224,13 @@ export default class GitArcClaimViewController {
 
   /**
    * HEAD with the sealed layers the caller builds on (its own, or a parent's) whatever its lifecycle phase, else plain
-   * HEAD. Pending tips always shape it; a landed tip needs a live arc's checkpoint to say whether it has been passed.
-   * Other owners' layers never shape it: their sealed work is theirs until the caller's stack contains it.
+   * HEAD. Other owners' layers never shape it: their sealed work is theirs until the caller's stack contains it.
    */
   private async callerBaseline(repository: WorkbenchGitRepository, input: GitArcClaimViewInput, entry: GitArcRegistryEntry | undefined, head: string | null) {
     const stack = new GitArcStackController(repository, this.resolveThreadIdentity);
     const inherited = await stack.viewTip(entry, input.stackParentThreadId);
     if (inherited) return await stack.sealedTree(head, inherited);
-    if (!entry?.stackTip) return head;
-    const arc = entry.phase === "plan" ? entry.retainedArc : entry;
-    const live = arc && arc.phase !== "resolved" ? arc : null;
-    const parent = live
-      ? (await new GitCheckpointStore(repository, this.resolveThreadIdentity).readCheckpoint(entry.harness as GitArcHarness, entry.threadId, live.checkpointCommit)).parent
-      : null;
-    const tip = await stack.baselineTip(entry, { parent });
-    return tip && (live || tip.pending) ? await stack.sealedTree(head, tip.commit) : head;
+    return await stack.sealedBaseline(entry, head) ?? head;
   }
 
   /**
