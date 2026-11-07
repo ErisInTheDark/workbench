@@ -364,7 +364,7 @@ func (owner *networkProcess) configure(ctx context.Context, configuration sideca
 				},
 			}
 			node.group = owner.group
-			owner.authority.publishDirectory = owner.group.publishDNS
+			owner.authority.publishDirectory = owner.group.publish
 			node.control, node.renew = owner.authority, owner.authority.renew
 			node.directorySnapshot = owner.directorySnapshot
 			node.access = &owner.access

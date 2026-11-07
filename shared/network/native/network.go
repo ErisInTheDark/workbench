@@ -622,29 +622,13 @@ func (node *privateNetwork) run() (result error) {
 	}
 	for _, server := range dnsServers {
 		server.Handler = dns.HandlerFunc(func(writer dns.ResponseWriter, request *dns.Msg) {
-			presentation := node.presentation.Load()
-			answer := dnsAnswer(presentation.hostname, status.TailscaleIPs, request,
-				append(slices.Clone(presentation.names), trustProbeHostname(presentation.hostname))...)
-			if node.directorySnapshot != nil {
-				if directory := node.directorySnapshot(); directory != nil {
-					if directory.Group.DNSNodeID != nodeID {
-						answer = new(dns.Msg).SetRcode(request, dns.RcodeRefused)
-					} else {
-						resolver := directoryDNS{members: func() []networkMember { return directory.Members }, exchange: publicDNSExchange}
-						_, tcp := writer.RemoteAddr().(*net.TCPAddr)
-						var err error
-						answer, err = resolver.answer(node.ctx, request, tcp)
-						if err != nil && node.ctx.Err() == nil {
-							message := err.Error()
-							node.change(func(current *privateStatus) { current.Message = &message })
-						}
-						if !tcp {
-							size := uint16(512)
-							if opt := request.IsEdns0(); opt != nil { size = max(size, opt.UDPSize()) }
-							answer.Truncate(int(min(size, 1232)))
-						}
-					}
-				}
+			var directory *networkDirectory
+			if node.directorySnapshot != nil { directory = node.directorySnapshot() }
+			_, tcp := writer.RemoteAddr().(*net.TCPAddr)
+			answer, err := answerPrivateDNS(node.ctx, node.presentation.Load(), status.TailscaleIPs, directory, request, tcp)
+			if err != nil && node.ctx.Err() == nil {
+				message := err.Error()
+				node.change(func(current *privateStatus) { current.Message = &message })
 			}
 			if err := writer.WriteMsg(answer); err != nil && node.ctx.Err() == nil {
 				message := "Private DNS response could not be sent."

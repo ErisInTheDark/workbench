@@ -1,6 +1,6 @@
 /*
  * Default export:
- * - WorkbenchNetworkAccessSettings: network rule rows for DNS hosting, ownership handover, machine removal and per-app device grants.
+ * - WorkbenchNetworkAccessSettings: DNS setup, ownership handover, machine removal and per-app device grants.
  */
 "use client";
 import { useState } from "react";
@@ -10,6 +10,7 @@ import PressDragMenu from "../ui/PressDragMenu";
 import IconButton from "../ui/IconButton";
 import RadioRow from "../ui/RadioRow";
 import WorkbenchCheckbox from "./WorkbenchCheckbox";
+import WorkbenchNetworkNameservers from "./WorkbenchNetworkNameservers";
 import PrimaryButton from "../ui/PrimaryButton";
 import { SettingsCardRow } from "../ui/SettingsCard";
 import { ChevronDownIcon, HomeIcon, LockIcon, SaveIcon, ResetIcon, XIcon } from "./workbench-icons";
@@ -74,12 +75,12 @@ export default function WorkbenchNetworkAccessSettings() {
     }, () => setDraft(null));
   }
   const confirmation = candidate?.kind === "dns" ? {
-    title: `Use ${selected?.label} for DNS?`, action: "Use this app",
-    detail: `Update the wb.inthedark.boo nameserver in Tailscale to ${selected?.addresses[0]}. Keep this app running for private names to resolve.`,
+    title: `Use ${selected?.label} as the DNS setup default?`, action: "Use this app",
+    detail: "This address is shown first during DNS setup. Every private member can answer; Tailscale chooses among the nameservers you configure.",
   } : candidate?.kind === "owner" ? {
     title: `Transfer ownership to ${selected?.label}?`, action: "Transfer",
-    detail: "This transfers network management and certificate signing. App grants and the selected nameserver stay unchanged.",
-  } : { title: `Remove ${selected?.label} from the network?`, action: "Remove", detail: "Its access rules are removed with it." };
+    detail: "This transfers network management and certificate signing. App grants and the DNS setup default stay unchanged.",
+  } : { title: `Remove ${selected?.label} from the network?`, action: "Remove", detail: "Its access rules are removed with it. If it is a configured nameserver, remove its address from Tailscale DNS first." };
   return <>
     {pendingTransfer ? <SettingsCardRow label="Handover">
       <span className="min-w-0 flex-1 basis-60 text-fg/muted">Ownership handover to {members.find(app => app.nodeId === pendingTransfer.toNodeId)?.label ?? "the selected app"} is waiting to finish. DNS hosting and access grants are unchanged.</span>
@@ -90,22 +91,20 @@ export default function WorkbenchNetworkAccessSettings() {
       <span className="text-fg/muted">Managed by {owner?.label ?? "the owner app"}. {policy.access === "selected"
         ? "You can change which devices reach this app." : "Change network settings on that computer."}</span>
     </SettingsCardRow> : null}
-    <SettingsCardRow label="Nameserver">
-      {(["dns", "owner"] as const).map(kind => {
+    {(["dns", "owner"] as const).map(kind => {
         const id = kind === "dns" ? group.dnsNodeId : group.ownerNodeId;
         const name = members.find(member => member.nodeId === id)?.label ?? "Unavailable";
-        return <span key={kind} className={`flex items-center gap-2 ${kind === "owner" ? "ml-6" : ""}`}>
-          {kind === "owner" ? <span className="text-fg/muted">Owner</span> : null}
-          {canManage && !busy ? <PressDragMenu label={`Choose ${kind === "dns" ? "nameserver app" : "network owner"}`}
+        return <SettingsCardRow key={kind} label={kind === "dns" ? "DNS setup default" : "Network owner"}><span className="flex items-center gap-2">
+          {canManage && !busy ? <PressDragMenu label={`Choose ${kind === "dns" ? "DNS setup default" : "network owner"}`}
             triggerClassName="-mx-2.5 text-text"
             items={members.map(member => ({ id: member.nodeId, checked: member.nodeId === id, content: <span className="inline-flex items-center gap-2">{member.label}<Availability state={availability(member.nodeId)} /></span> }))}
             onSelect={nodeId => choose(kind, nodeId)}>
             <span className="font-medium">{name}</span><ChevronDownIcon className="size-3.5 text-fg/muted" />
           </PressDragMenu> : <span className="font-medium text-text">{name}</span>}
           <Availability state={availability(id)} />
-        </span>;
+        </span></SettingsCardRow>;
       })}
-    </SettingsCardRow>
+    <SettingsCardRow label="Nameservers"><WorkbenchNetworkNameservers /></SettingsCardRow>
     <SettingsCardRow label="Machines">
       <span className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1">{members.map(member => <span key={member.nodeId} className="inline-flex items-center gap-1.5">
         <span className="font-medium text-text">{member.label}</span>
@@ -158,7 +157,7 @@ export default function WorkbenchNetworkAccessSettings() {
     </div></SettingsCardRow> : null}
     {stale || snapshot.runtime.privateAccess.pendingUpdates?.length || error ? <SettingsCardRow>
       {stale ? <p className="m-0 text-danger" role="alert">Network settings changed while you were editing. Reset your draft before saving.</p> : null}
-      {snapshot.runtime.privateAccess.pendingUpdates?.length ? <p className="m-0 text-fg/muted">Updates are still pending on {snapshot.runtime.privateAccess.pendingUpdates.length} apps. Existing policy remains in force there.</p> : null}
+      {snapshot.runtime.privateAccess.pendingUpdates?.length ? <p className="m-0 text-fg/muted">Updates are still pending on {snapshot.runtime.privateAccess.pendingUpdates.length} apps. Existing policy remains in force there, and DNS answers may be out of date.</p> : null}
       {error ? <p className="m-0 text-danger" role="alert">{error}</p> : null}
     </SettingsCardRow> : null}
     {draft ? <SettingsCardRow>
@@ -167,7 +166,7 @@ export default function WorkbenchNetworkAccessSettings() {
       <IconButton size="small" display="hover-border" label="Reset access changes" disabled={busy} onClick={() => setDraft(null)}><ResetIcon className="size-4" /></IconButton>
     </SettingsCardRow> : null}
     {snapshot.capabilities?.manageApp && snapshot.runtime.privateAccess.nodeId && group.dnsNodeId !== snapshot.runtime.privateAccess.nodeId ? <SettingsCardRow label="Private address">
-      <span className="min-w-0 flex-1 basis-60 text-fg/muted">Drop this app's private name and keep using its tailnet IP. Device trust stays.</span>
+      <span className="min-w-0 flex-1 basis-60 text-fg/muted">Drop this app's private name and keep using its tailnet IP. Device trust stays. If this app is a configured nameserver, remove its address from Tailscale DNS first.</span>
       <PrimaryButton shape="compact" disabled={busy || !snapshot.localPort || !snapshot.capabilities.settingsApply}
         onClick={() => {
           setWorking(true);

@@ -1,4 +1,4 @@
-// No exports. Answer the private app directory and forward public misses without system DNS recursion.
+// No exports. Own private DNS query policy, saved directory answers and public-miss forwarding.
 package main
 
 import (
@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 
 	"github.com/miekg/dns"
@@ -14,6 +15,21 @@ import (
 type directoryDNS struct {
 	members func() []networkMember
 	exchange func(context.Context, *dns.Msg, bool) (*dns.Msg, error)
+}
+
+func answerPrivateDNS(ctx context.Context, presentation *privatePresentation, addresses []netip.Addr, directory *networkDirectory, query *dns.Msg, tcp bool) (*dns.Msg, error) {
+	if directory == nil {
+		return dnsAnswer(presentation.hostname, addresses, query,
+			append(slices.Clone(presentation.names), trustProbeHostname(presentation.hostname))...), nil
+	}
+	resolver := directoryDNS{members: func() []networkMember { return directory.Members }, exchange: publicDNSExchange}
+	answer, err := resolver.answer(ctx, query, tcp)
+	if !tcp {
+		size := uint16(512)
+		if opt := query.IsEdns0(); opt != nil { size = max(size, opt.UDPSize()) }
+		answer.Truncate(int(min(size, 1232)))
+	}
+	return answer, err
 }
 
 func publicDNSExchange(ctx context.Context, query *dns.Msg, tcp bool) (*dns.Msg, error) {

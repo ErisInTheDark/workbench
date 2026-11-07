@@ -8,10 +8,10 @@ import type { WorkbenchNetworkAction } from "workbench-shared/http/workbench-net
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
 import privateAccessStep from "../../workbench/app/private-access-step";
 import PrimaryButton from "../ui/PrimaryButton";
-import WorkbenchCopyButton from "./WorkbenchCopyButton";
 import WorkbenchLinkButton from "./WorkbenchLinkButton";
 import WorkbenchCertificateInstall from "./WorkbenchCertificateInstall";
 import WorkbenchCertificateTrust from "./WorkbenchCertificateTrust";
+import WorkbenchNetworkNameservers from "./WorkbenchNetworkNameservers";
 import { ExternalLinkIcon, RefreshCwIcon } from "./workbench-icons";
 
 export default function WorkbenchPrivateAccessWizard() {
@@ -23,7 +23,6 @@ export default function WorkbenchPrivateAccessWizard() {
   if (!snapshot) return null;
   const status = snapshot.runtime.privateAccess;
   const configuration = snapshot.configuration.privateAccess;
-  const dnsApp = snapshot.configuration.members.find(member => member.nodeId === snapshot.configuration.group?.dnsNodeId);
   const step = privateAccessStep(snapshot, network.verification.phase, dnsConfirmed);
   const busy = working || snapshot.busy || network.verification.phase === "checking";
   const editable = snapshot.capabilities?.manageApp ?? false;
@@ -57,13 +56,8 @@ export default function WorkbenchPrivateAccessWizard() {
     {step === "choose" ? <div className="flex flex-wrap gap-2">{status.networks?.map(candidate => <PrimaryButton key={candidate.id} disabled={busy || !editable}
       onClick={() => act({ action: "select-network", id: candidate.id })}>{candidate.label}'s network</PrimaryButton>)}</div> : null}
     {step === "dns" ? <>
-      <p className="m-0 text-sm text-fg/muted">In Tailscale DNS settings, add this nameserver and restrict it to <strong className="font-medium text-text">wb.inthedark.boo</strong>. This is one entry for every app, not one per computer.</p>
-      <div className="flex flex-wrap items-center gap-2">
-        <code className="select-all text-sm text-text">{dnsApp?.addresses[0] ?? "Waiting for the DNS app address"}</code>
-        {dnsApp?.addresses[0] ? <WorkbenchCopyButton label="Copy nameserver address" text={dnsApp.addresses[0]} /> : null}
-        <WorkbenchLinkButton href="https://login.tailscale.com/admin/dns" target="_blank" rel="noreferrer">Open Tailscale DNS<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
-      </div>
-      <PrimaryButton disabled={busy} onClick={() => { setDnsConfirmed(true); void run(() => network.client.verify()); }}>I've added the entry</PrimaryButton>
+      <WorkbenchNetworkNameservers />
+      <PrimaryButton disabled={busy} onClick={() => { setDnsConfirmed(true); void run(() => network.client.verify()); }}>I've added the nameservers</PrimaryButton>
     </> : null}
     {step === "trust" && status.rootCertificate ? <>
       <div className="flex flex-wrap items-center gap-2">

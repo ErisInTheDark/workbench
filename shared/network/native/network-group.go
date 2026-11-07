@@ -191,32 +191,22 @@ func (group *networkGroupController) publishExcept(ctx context.Context, exclude 
 	if err != nil { return errors.New("Tailscale app availability could not be checked") }
 	online := make(map[string]bool)
 	for _, peer := range status.Peer { online[string(peer.ID)] = peer.Online }
-	var failures []error
 	var pending []string
 	for _, member := range envelope.Directory.Members {
 		if member.NodeID == envelope.Directory.Group.OwnerNodeID || member.NodeID == exclude { continue }
 		if !online[member.NodeID] {
 			pending = append(pending, member.NodeID)
-			failures = append(failures, fmt.Errorf("app %s is offline and has not acknowledged the network update", member.Label))
 			continue
 		}
 		if err := group.request(ctx, member, "/directory", envelope, nil); err != nil {
 			pending = append(pending, member.NodeID)
-			failures = append(failures, fmt.Errorf("app %s has not acknowledged the network update", member.Label))
 		}
 	}
 	group.node.change(func(status *privateStatus) { status.PendingUpdates = pending })
-	return errors.Join(failures...)
-}
-
-func (group *networkGroupController) publishDNS(ctx context.Context) error {
-	err := group.publish(ctx)
-	if err == nil { return nil }
-	group.authority.fail(err.Error())
-	directory := group.directory()
-	if directory != nil && directory.Group.DNSNodeID == directory.Group.OwnerNodeID { return nil }
-	if directory == nil || slices.Contains(group.node.snapshot().PendingUpdates, directory.Group.DNSNodeID) { return err }
-	return nil
+	if len(pending) > 0 {
+		group.authority.fail(fmt.Sprintf("%d apps have not acknowledged the network update; their DNS answers may be out of date.", len(pending)))
+	}
+	return ctx.Err()
 }
 
 func (group *networkGroupController) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -456,10 +446,13 @@ func (group *networkGroupController) discover(ctx context.Context, selection ...
 	var publication struct { Pending []string `json:"pending"` }
 	if err := group.request(ctx, owner, "/sync", struct{}{}, &publication); err != nil { return err }
 	group.node.change(func(status *privateStatus) { status.PendingUpdates = publication.Pending })
-	if slices.Contains(publication.Pending, welcome.Envelope.Directory.Group.DNSNodeID) {
-		return errors.New("the selected DNS app has not received this address; reconnect it and retry")
-	}
-	group.node.change(func(status *privateStatus) { status.Discovery, status.Networks, status.Message = "joined", nil, nil })
+	group.node.change(func(status *privateStatus) {
+		status.Discovery, status.Networks, status.Message = "joined", nil, nil
+		if len(publication.Pending) > 0 {
+			message := "Some apps have not received the latest directory; their DNS answers may be out of date."
+			status.Message = &message
+		}
+	})
 	return nil
 }
 
@@ -705,7 +698,7 @@ func (group *networkGroupController) removeMember(ctx context.Context, nodeID st
 	next, err := withoutMember(*group.directory(), nodeID)
 	if err != nil { return err }
 	if err := group.store(ctx, next); err != nil { return err }
-	return group.publishDNS(ctx)
+	return group.publish(ctx)
 }
 
 func (group *networkGroupController) unpublish(ctx context.Context, peerID string, csr []byte) error {
@@ -725,7 +718,7 @@ func (group *networkGroupController) unpublish(ctx context.Context, peerID strin
 	directory.Members = members
 	directory.Group.Revision++
 	if err := group.store(ctx, directory); err != nil { return err }
-	return group.publishDNS(ctx)
+	return group.publish(ctx)
 }
 
 func (group *networkGroupController) removeRegistration(ctx context.Context) error {

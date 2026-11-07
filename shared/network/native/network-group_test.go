@@ -3,12 +3,20 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"tailscale.com/client/local"
+	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/types/key"
 )
 
 func TestLateEnrolmentCannotOverwriteAnAddressChange(t *testing.T) {
@@ -28,15 +36,50 @@ func TestLateEnrolmentCannotOverwriteAnAddressChange(t *testing.T) {
 }
 
 func TestDNSPublicationCannotSucceedWithoutSigningTheUpdate(t *testing.T) {
-	directory := directoryFixture()
-	self := "desktop"
-	node := &privateNetwork{directory: t.TempDir(), publish: func(privateStatus) {}, status: privateStatus{NodeID: &self}}
-	group := &networkGroupController{
-		node: node, authority: &networkAuthority{node: node},
-		read: func() networkConfiguration { return networkConfiguration{Group: &directory.Group, Members: directory.Members} },
+	for _, setupDefault := range []string{"desktop", "nas"} {
+		directory := directoryFixture()
+		directory.Group.DNSNodeID = setupDefault
+		self := directory.Group.OwnerNodeID
+		node := &privateNetwork{directory: t.TempDir(), publish: func(privateStatus) {}, status: privateStatus{NodeID: &self}}
+		group := &networkGroupController{
+			node: node, authority: &networkAuthority{node: node},
+			read: func() networkConfiguration { return networkConfiguration{Group: &directory.Group, Members: directory.Members} },
+		}
+		if err := group.publish(context.Background()); err == nil { t.Fatal("directory publication succeeded without a signed update") }
 	}
-	if err := group.publishDNS(context.Background()); err == nil {
-		t.Fatal("remote DNS publication succeeded without a signed update or acknowledgement")
+}
+
+func TestUnavailableReplicaLeavesPublicationPendingWithoutBlockingTheDirectory(t *testing.T) {
+	for _, peer := range []struct { name string; online bool }{{"offline", false}, {"cannot verify identity", true}} {
+		t.Run(peer.name, func(t *testing.T) {
+			directory := directoryFixture()
+			self := directory.Group.OwnerNodeID
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				status := ipnstate.Status{Peer: map[key.NodePublic]*ipnstate.PeerStatus{{}: {ID: "nas", Online: peer.online}}}
+				if err := json.NewEncoder(response).Encode(status); err != nil { t.Error(err) }
+			}))
+			defer server.Close()
+			node := &privateNetwork{
+				directory: t.TempDir(), publish: func(privateStatus) {}, status: privateStatus{NodeID: &self},
+				local: &local.Client{UseSocketOnly: true, Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+				}},
+			}
+			ca, err := createAuthority(time.Now())
+			if err != nil { t.Fatal(err) }
+			material, err := ca.marshal()
+			if err != nil { t.Fatal(err) }
+			if err := writePrivateFile(filepath.Join(node.directory, "authority.pem"), material); err != nil { t.Fatal(err) }
+			group := &networkGroupController{
+				node: node, authority: &networkAuthority{node: node},
+				read: func() networkConfiguration { return networkConfiguration{Group: &directory.Group, Members: directory.Members} },
+			}
+			if err := group.publish(context.Background()); err != nil { t.Fatal("an unavailable replica blocked the committed local directory:", err) }
+			status := node.snapshot()
+			if !slices.Equal(status.PendingUpdates, []string{directory.Group.DNSNodeID}) || status.Message == nil {
+				t.Fatalf("unavailable replica was not reported as pending: %#v", status)
+			}
+		})
 	}
 }
 

@@ -11,7 +11,7 @@
  * - WorkbenchNetworkAction/WorkbenchNetworkResult/WorkbenchNetworkSidecarConfiguration/WorkbenchNetworkCommand: inferred intent/process contracts.
  * - WorkbenchNetworkModeSchema/workbenchNetworkMode: selected exposure mode and legacy flag conversion.
  * - WorkbenchNetworkRenameSchema: durable URL transition intent and activation phase.
- * - WorkbenchNetworkGroupSchema/WorkbenchNetworkGroup: directory authority, DNS selection and remote app grants.
+ * - WorkbenchNetworkGroupSchema/WorkbenchNetworkGroup: directory authority, DNS setup default and remote app grants.
  * - WorkbenchNetworkSettingsSchema/WorkbenchNetworkSettings: one explicit connection-settings draft.
  */
 import { z } from "zod";
@@ -61,6 +61,7 @@ export const WorkbenchNetworkGroupSchema = z.object({
   id: z.uuid(),
   revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   ownerNodeId: nodeId,
+  /** Setup default retained in signed directories; every private member can serve DNS. */
   dnsNodeId: nodeId,
   access: z.enum(["all", "selected"]),
   grants: z.array(z.object({ deviceNodeId: nodeId, appNodeId: nodeId }).strict()).max(4096),

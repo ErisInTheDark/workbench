@@ -1,4 +1,4 @@
-// No exports. Protect exact-name ownership, address families and negative DNS responses.
+// No exports. Protect offline directory answers, pre-join name ownership, address families and negative responses.
 package main
 
 import (
@@ -46,6 +46,33 @@ func TestDirectoryDNS(t *testing.T) {
 	if err == nil || answer.Rcode != dns.RcodeServerFailure { t.Fatal("upstream failure must not become a negative answer") }
 	answer, err = resolver.answer(context.Background(), new(dns.Msg).SetQuestion("example.com.", dns.TypeA), false)
 	if err != nil || answer.Rcode != dns.RcodeRefused { t.Fatal("private DNS must not become an unrestricted resolver") }
+}
+
+func TestEveryMemberAnswersTheSavedDirectoryWithoutItsOwner(t *testing.T) {
+	directory := directoryFixture()
+	for _, responder := range directory.Members {
+		presentation := &privatePresentation{hostname: responder.Label+".wb.inthedark.boo"}
+		for _, member := range directory.Members {
+			for _, tcp := range []bool{false, true} {
+				query := new(dns.Msg).SetQuestion(member.Label+".wb.inthedark.boo.", dns.TypeA)
+				answer, err := answerPrivateDNS(context.Background(), presentation, nil, &directory, query, tcp)
+				if err != nil || answer.Rcode != dns.RcodeSuccess || !answer.Authoritative || len(answer.Answer) != 1 {
+					t.Fatalf("could not answer %s from the saved directory: %v %v", member.Label, answer, err)
+				}
+			}
+		}
+	}
+}
+
+func TestPrivateDNSBeforeJoiningAnswersOnlyItsOwnNames(t *testing.T) {
+	presentation := &privatePresentation{hostname: "desktop.wb.inthedark.boo", names: []string{"previous.wb.inthedark.boo"}}
+	addresses := []netip.Addr{netip.MustParseAddr("100.80.0.1")}
+	for _, name := range []string{presentation.hostname, presentation.names[0], trustProbeHostname(presentation.hostname)} {
+		answer, err := answerPrivateDNS(context.Background(), presentation, addresses, nil, new(dns.Msg).SetQuestion(name+".", dns.TypeA), false)
+		if err != nil || !answer.Authoritative || len(answer.Answer) != 1 { t.Fatalf("own name was not answered before joining: %v %v", answer, err) }
+	}
+	answer, err := answerPrivateDNS(context.Background(), presentation, addresses, nil, new(dns.Msg).SetQuestion("nas.wb.inthedark.boo.", dns.TypeA), false)
+	if err != nil || answer.Rcode != dns.RcodeRefused { t.Fatalf("answered a different member before joining: %v %v", answer, err) }
 }
 
 func TestDNSOwnership(t *testing.T) {
