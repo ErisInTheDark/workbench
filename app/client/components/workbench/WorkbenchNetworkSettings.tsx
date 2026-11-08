@@ -1,13 +1,15 @@
 /*
  * Default export:
- * - WorkbenchNetworkSettings: app reachability status (including private DNS coverage), any needed setup, Connection, Other devices with certificate download, and Network rules.
+ * - WorkbenchNetworkSettings: app reachability status, any needed setup, Connection, Other devices with certificate download,
+ *   and Network rules (sync with the owner, private DNS and device grants, marked in its summary when they need attention).
  */
 "use client";
 import { useContext, useState } from "react";
-import { workbenchNetworkMode, type WorkbenchNetworkAction } from "workbench-shared/http/workbench-network";
+import { workbenchNetworkMode, type WorkbenchNetworkAction, type WorkbenchNetworkSnapshot } from "workbench-shared/http/workbench-network";
 import { WorkbenchNetworkClientContext, useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
 import { networkDnsCoverage } from "../../workbench/app/network-dns-coverage";
 import WorkbenchNetworkPrivateDns from "./WorkbenchNetworkPrivateDns";
+import WorkbenchNetworkSync, { type WorkbenchNetworkSyncState } from "./WorkbenchNetworkSync";
 import Disclosure from "../ui/Disclosure";
 import FormSection from "../ui/FormSection";
 import PrimaryButton from "../ui/PrimaryButton";
@@ -20,7 +22,26 @@ import WorkbenchNetworkAccessSettings from "./WorkbenchNetworkAccessSettings";
 import WorkbenchNetworkConnectionForm from "./WorkbenchNetworkConnectionForm";
 import WorkbenchPrivateAccessWizard from "./WorkbenchPrivateAccessWizard";
 import WorkbenchQrCode from "./WorkbenchQrCode";
-import { CheckIcon, ExternalLinkIcon, TriangleAlertIcon } from "./workbench-icons";
+import { CheckIcon, ExternalLinkIcon, TriangleAlertIcon, XIcon } from "./workbench-icons";
+
+function networkSyncState(snapshot: WorkbenchNetworkSnapshot): WorkbenchNetworkSyncState {
+  const status = snapshot.runtime.privateAccess;
+  const group = snapshot.configuration.group;
+  const owner = group ? snapshot.configuration.members.find(member => member.nodeId === group.ownerNodeId) ?? null : null;
+  if (group && owner && owner.nodeId === status.nodeId) return { kind: "owner" };
+  if (status.discovery === "failed") {
+    const ownerOnline = owner ? status.tailnetDns?.members?.find(entry => owner.addresses.includes(entry.address))?.online ?? null : null;
+    return { kind: "failed", owner: owner?.label ?? null, ownerOnline, detail: status.message };
+  }
+  return { kind: "synced", owner: owner?.label ?? "this network's owner", revision: group?.revision ?? 0 };
+}
+
+function RulesChip({ label, state }: { label: string; state: "ok" | "attention" | "danger" }) {
+  const Icon = state === "ok" ? CheckIcon : state === "danger" ? XIcon : TriangleAlertIcon;
+  return <span className={`flex items-center gap-1 ${state === "ok" ? "text-fg/muted" : state === "danger" ? "text-danger" : "text-[color:var(--attention)]"}`}>
+    <Icon size={14} className="size-3.5" />{label}
+  </span>;
+}
 
 /** Shows `url` itself, or `text` in its place when the address is too long to be worth reading. */
 function Address({ label, url, text }: { label: string; url: string; text?: string }) {
@@ -58,9 +79,9 @@ function NetworkSettingsContent () {
   // Another device lands on this page, where it can trust the certificate before HTTPS works there.
   const tailnetUrl = status.hostServe.url ? new URL("/@/settings#settings-connection", status.hostServe.url).href : null;
   const dns = service ? networkDnsCoverage(snapshot) : null;
-  const dnsAttention = Boolean(dns && dns.verdict !== "healthy");
+  const sync = networkSyncState(snapshot);
   const attention = service
-    ? dnsAttention || !httpsReady && (network.verification.phase === "failed" || status.privateAccess.phase === "failed" || !snapshot.executable.available)
+    ? dns?.verdict === "broken" || !httpsReady && (network.verification.phase === "failed" || status.privateAccess.phase === "failed" || !snapshot.executable.available)
     : mode !== "localhost" && status.hostServe.phase !== "ready";
   const connectionStatus = mode === "localhost" ? "Only this computer"
     : service ? httpsReady ? "HTTPS ready"
@@ -112,7 +133,6 @@ function NetworkSettingsContent () {
     {mode !== "localhost" && !privateAccess && status.hostServe.phase === "failed"
       ? <PrimaryButton shape="compact" disabled={busy || !editable} onClick={() => { void act({ action: "retry" }); }}>Reconnect</PrimaryButton> : null}
     {service && privateAccess ? <WorkbenchPrivateAccessWizard /> : null}
-    {service && snapshot.configuration.group ? <WorkbenchNetworkPrivateDns coverage={dns} /> : null}
     {!snapshot.capabilities ? <p role="status" className="m-0 text-sm text-fg/muted">Networking controls are waiting for the updated app runtime. Reload client:database, then refresh this page.</p> : null}
     <div className="@container pt-2"><div className="flex flex-col gap-6 @4xl:flex-row @4xl:gap-0">
       <div className="min-w-0 flex-1 @4xl:pr-6"><WorkbenchNetworkConnectionForm /></div>
@@ -134,9 +154,18 @@ function NetworkSettingsContent () {
     {group ? <Disclosure id="settings-app-access" className="scroll-mt-24 border-t border-fg/8" summaryClassName="py-2.5 text-base" contentClassName="pb-3 pl-7"
       summary={<span className="flex min-w-0 items-center justify-between gap-3">
         <span className="font-medium text-text">Network rules</span>
-        <span className="truncate text-sm text-fg/muted">{group.access === "all" ? "All tailnet devices" : `Selected devices · ${group.grants.length} grants`}</span>
+        {service ? <span className="flex shrink-0 items-center gap-3 text-sm">
+          <RulesChip label="Sync" state={sync.kind === "failed" ? "attention" : "ok"} />
+          <RulesChip label="DNS" state={!dns ? "ok" : dns.verdict === "broken" ? "danger" : dns.verdict === "fragile" ? "attention" : "ok"} />
+        </span> : null}
       </span>}>
-      <SettingsCard label="Network rules" flush><WorkbenchNetworkAccessSettings /></SettingsCard>
+      <div className="space-y-4">
+        {service ? <>
+          <WorkbenchNetworkSync state={sync} busy={busy || !editable} onRetry={() => { void act({ action: "retry" }); }} />
+          <WorkbenchNetworkPrivateDns coverage={dns} />
+        </> : null}
+        <SettingsCard label="Network rules" flush><WorkbenchNetworkAccessSettings /></SettingsCard>
+      </div>
     </Disclosure> : null}
   </section>;
 }
