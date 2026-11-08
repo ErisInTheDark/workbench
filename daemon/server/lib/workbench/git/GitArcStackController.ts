@@ -198,19 +198,24 @@ export default class GitArcStackController {
     return new Set((await this.readOwnLayers(entry)).flatMap(({ layer }) => layer.proposalIds));
   }
 
-  /** Paths represented by this owner's still-pending sealed proposals. */
-  async pendingOwnBaselinePaths(entry: GitArcRegistryEntry, excludedProposalIds: ReadonlySet<string> = new Set()) {
-    const ownLayers = await this.readOwnLayers(entry);
-    const summaries = await this.store().readProposalSummaryGroups(ownLayers.map(({ layer }) => ({
+  /**
+   * Paths of still-pending sealed proposals this owner guards: all of its own layers' paths, plus inherited layers'
+   * paths it holds through transfer, since dropping those would leave unlanded content unguarded.
+   */
+  async pendingBaselinePaths(entry: GitArcRegistryEntry, excludedProposalIds: ReadonlySet<string> = new Set()) {
+    const layers = await this.readChain(entry.stackTip);
+    const summaries = await this.store().readProposalSummaryGroups(layers.map(({ layer }) => ({
       harness: layer.harness as GitArcHarness,
       proposalIds: layer.proposalIds,
       threadId: layer.threadId,
     })));
+    const held = new GitArcPathSet(getGitArcLiveClaimPaths(entry));
     const paths: string[] = [];
-    ownLayers.forEach(({ layer }, index) => {
+    layers.forEach(({ layer }, index) => {
+      const own = ownsLayer(layer, entry);
       for (const proposal of summaries[index] ?? []) {
         if (!excludedProposalIds.has(proposal.proposalId) && proposal.status === "proposed") {
-          paths.push(...proposal.livePaths);
+          paths.push(...own ? proposal.livePaths : proposal.livePaths.filter(path => held.covers(path)));
         }
       }
     });

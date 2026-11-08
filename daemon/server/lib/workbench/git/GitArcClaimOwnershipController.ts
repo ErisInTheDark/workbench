@@ -58,7 +58,7 @@ export default class GitArcClaimOwnershipController {
     if (!entry.stackTip) return [];
     const guards = new GitArcPathSet(getGitArcLiveClaimPaths(entry));
     const stack = new GitArcStackController(this.repository, this.resolveThreadIdentity);
-    return (await stack.pendingOwnBaselinePaths(entry)).filter(path => guards.covers(path));
+    return (await stack.pendingBaselinePaths(entry)).filter(path => guards.covers(path));
   }
 
   async project(entry: GitArcRegistryEntry, worktreeTree?: string | null): Promise<GitArcClaimOwnership> {

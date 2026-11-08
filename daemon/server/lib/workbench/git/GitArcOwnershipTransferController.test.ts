@@ -8,7 +8,7 @@ import test from "node:test";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
 import type { GitArcRejectionError } from "workbench-shared/workbench/git/git-arc-rejections";
 import GitArcClaimLossStore from "./GitArcClaimLossStore";
-import GitArcRegistry from "./GitArcRegistry";
+import GitArcRegistry, { type GitArcCollisionError } from "./GitArcRegistry";
 import GitTestFixtureCache from "./GitTestFixtureCache";
 import WorkbenchGitRepository from "./WorkbenchGitRepository";
 import { CONTROLLER_BASE_FIXTURE } from "./GitArcControllerTestFixtures";
@@ -531,6 +531,14 @@ test("stacking keeps a parent's proposal committable through a plan-selected rel
   const parent = await controller.readStatus({ cwd, threadId: "parent" });
   assert.equal(parent.unavailable, undefined);
   assert.ok(JSON.stringify(parent.stacked).includes(proposal.proposalId), "the sealed proposal survives on the parent");
+  await controller.editPlanClaims({
+    cwd, threadId: "child", inherit: true, addPaths: [], removePaths: [], adoptPaths: [], stackParentThreadId: "parent",
+  });
+  await assert.rejects(start(controller, cwd, "other", ["one.txt"]), (error: Error) => {
+    assert.equal(error.name, "GitArcCollisionError", `republishing keeps the transferred claim guarding unlanded sealed content: ${error.message}`);
+    assert.deepEqual((error as GitArcCollisionError).collisions.map(({ entry }) => entry.threadId), ["child"]);
+    return true;
+  });
   await controller.startArc({ cwd, threadId: "child" });
   assert.deepEqual((await controller.readScope({ cwd, threadId: "child" }))?.claimedPaths, ["one.txt"]);
   const inherited = await controller.readStatus({ cwd, threadId: "child" });

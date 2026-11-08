@@ -87,7 +87,7 @@ test("stack projection reuses immutable layers and bulk-reads pending proposal p
 
   const proposalReads = context.mock.method(GitCheckpointStore.prototype, "readProposal");
   const groupedReads = context.mock.method(GitCheckpointStore.prototype, "readProposalSummaryGroups");
-  await stack.pendingOwnBaselinePaths(entry);
+  await stack.pendingBaselinePaths(entry);
   const projectionReads = {
     grouped: groupedReads.mock.callCount(),
     serial: proposalReads.mock.callCount(),

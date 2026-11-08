@@ -303,7 +303,7 @@ async function prepareAcceptedClaimTransition({
   const changedPaths = currentTree ? await repository.listChangedPaths(acceptedHead, currentTree, before.activeClaims) : [];
   const activeClaimedPaths = changedPaths.length ? before.activeClaims : [];
   const currentGuards = new GitArcPathSet(before.guardClaims);
-  const baselineClaims = (await stack.pendingOwnBaselinePaths(current, accepted))
+  const baselineClaims = (await stack.pendingBaselinePaths(current, accepted))
     .filter(path => currentGuards.covers(path));
   const claimedPaths = [...new Set([...activeClaimedPaths, ...baselineClaims])]
     .sort((left, right) => left.localeCompare(right));

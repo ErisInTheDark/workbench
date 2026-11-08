@@ -1439,7 +1439,7 @@ export default class WorkbenchGitCheckpointController {
   /** Claims are the write gate for restores that name no arc snapshot; a folder is never covered by the file claims inside it. */
   private async requireRestorableClaims(repository: WorkbenchGitRepository, entry: GitArcRegistryEntry | null, paths: string[]) {
     const owned = new GitArcPathSet(entry
-      ? [...getGitArcLiveClaimPaths(entry), ...await this.stack(repository).pendingOwnBaselinePaths(entry)]
+      ? [...getGitArcLiveClaimPaths(entry), ...await this.stack(repository).pendingBaselinePaths(entry)]
       : []);
     const outside = paths.filter((filePath) => !owned.covers(filePath));
     if (outside.length) {

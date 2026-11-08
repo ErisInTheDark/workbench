@@ -13,7 +13,8 @@
  * listWorktreeChangedPaths reuses the real index's stat cache so clean files are not re-hashed;
  * readCommitRef finds a commit's ref through GitCommitRefLocator, which every ref writer here keeps current;
  * allAncestors checks containment in one walk; worktree snapshots seed temporary indexes from the real index so only
- * changed files are re-hashed, and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk;
+ * changed files are re-hashed, retry staging while another writer rewrites a file mid-read (worktree-indexing-retry),
+ * and scoped worktree reads pass literal pathspecs; listRefsContaining finds refs holding a commit in one walk;
  * buildFileChanges/buildChangeTotals/buildFileChangeSummaries list changed files in-process, then diff them in pathspec batches
  * that fit the command line, with at most four Git processes in flight. listIgnoredWorktreePaths walks wholly-ignored
  * folders itself so oversized ignored scopes fail fast. Git children never take optional index locks;
@@ -42,6 +43,7 @@ import { FILTERED_BLOB_BATCH_ARGS, parseFilteredBlobBatch, planFilteredBlobBatch
 import parseGitFileChangeOutput, { parseGitChangeTotalsOutput } from "./git-file-change-output";
 import { BoundaryWalkLimitError, listBoundaryFiles, nestedRepositoryScopes } from "./machine-git-boundaries";
 import { isMachineGitWorktree, machineGitEnvironment, readMachineKnownPaths } from "./machine-git-worktrees";
+import retryWorktreeIndexing from "./worktree-indexing-retry";
 import WorktreeLinks from "./worktree-links";
 import { comparablePath, isPathInside as isWithinRoot } from "../../comparable-path";
 import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/checkpoint-contracts";
@@ -742,11 +744,11 @@ export default class WorkbenchGitRepository {
       await this.seedTemporaryIndex(indexPath, baseTreeish, env, signal);
       if (this.machine) {
         // Tracked files plus paths arcs requested, which may be new and untracked; an empty index rejects a `.` pathspec.
-        await this.run(["add", "-u"], env, signal);
+        await retryWorktreeIndexing(async () => await this.run(["add", "-u"], env, signal), { signal });
         const known = await readMachineKnownPaths(this.root);
         if (known.length) await this.stageScopedPaths(known, env, signal);
       } else {
-        await this.run(["add", "-A", "--", "."], env, signal);
+        await retryWorktreeIndexing(async () => await this.run(["add", "-A", "--", "."], env, signal), { signal });
       }
       return (await this.run(["write-tree"], env, signal)).trim();
     });
@@ -896,11 +898,11 @@ export default class WorkbenchGitRepository {
     const boundary = new Set(this.machine ? await nestedRepositoryScopes(this.root, matchedPaths) : []);
     const added = matchedPaths.filter(filePath => !boundary.has(filePath));
     if (added.length) {
-      await this.runWithInput([
+      await retryWorktreeIndexing(async () => await this.runWithInput([
         "add", "-A", "-f", "--pathspec-from-file=-", "--pathspec-file-nul",
-      ], pathspecInput(added), env, signal);
+      ], pathspecInput(added), env, signal), { signal });
     }
-    if (boundary.size) await this.stageBoundaryFiles([...boundary], env, signal);
+    if (boundary.size) await retryWorktreeIndexing(async () => await this.stageBoundaryFiles([...boundary], env, signal), { signal });
   }
 
   async writeTreeWithPathsFromSource(baseTreeish: string | null, sourceTreeish: string, paths: string[]) {
