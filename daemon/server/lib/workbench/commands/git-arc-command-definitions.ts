@@ -523,17 +523,21 @@ function splitPair(flag: string, value: string) {
 }
 
 const restack = defineWorkbenchAgentCommand({
-  description: "Atomically drop pending proposals, strip paths from them, or fold one into another anywhere in the caller's own stack, rebasing later proposals by merge; the worktree is untouched and dropped or stripped paths return to active claims.",
+  description: "Atomically drop pending proposals, strip paths from them, or fold one into another anywhere in the caller's own stack, rebasing later proposals by merge; the worktree is untouched and dropped or stripped paths return to active claims. Folds alone never change the stacked files.",
   helpGroups: ["git-arc"],
   words: ["git", "arc", "restack"],
-  usage: "wb git arc restack [--drop <proposal-id>]... [--strip <proposal-id>=<path>]... [--fold <proposal-id>=<into-proposal-id>]...",
+  usage: "wb git arc restack [--drop <proposal-id>]... [--strip <proposal-id>=<path>]... [--fold <proposal-id>=<into-proposal-id>]... [--partial] [--dry-run]",
   inputSchema: GitArcRestackEditsSchema.extend({
     drop: GitArcRestackEditsSchema.shape.drop.describe("Proposals to remove; they become rescinded."),
-    fold: GitArcRestackEditsSchema.shape.fold.describe("Merge each proposal's changes into `into`, in its own or a lower layer."),
+    dryRun: GitArcRestackEditsSchema.shape.dryRun.describe("Report the outcomes without changing anything; new ids it reports are placeholders."),
+    fold: GitArcRestackEditsSchema.shape.fold.describe("Merge each proposal's changes into `into`, in any layer of the own stack."),
+    partial: GitArcRestackEditsSchema.shape.partial.describe(
+      "Folds move what merges cleanly instead of rejecting; files (or, folding down, hunks) that conflict stay at the source as a residual proposal, reported as split or unmoved.",
+    ),
     strip: GitArcRestackEditsSchema.shape.strip.describe("Path prefixes whose changes leave the proposal."),
   }).strict().refine(({ drop, fold, strip }) => drop.length + fold.length + strip.length > 0, "Supply at least one drop, strip or fold."),
   parseCliArgs(args) {
-    const flags = new WorkbenchAgentCommandFlags(args, { repeatable: ["--drop", "--fold", "--strip"] });
+    const flags = new WorkbenchAgentCommandFlags(args, { boolean: ["--dry-run", "--partial"], repeatable: ["--drop", "--fold", "--strip"] });
     const strip = new Map<string, string[]>();
     for (const value of flags.repeated("--strip")) {
       const [proposalId, stripPath] = splitPair("--strip", value);
@@ -541,16 +545,19 @@ const restack = defineWorkbenchAgentCommand({
     }
     return {
       drop: flags.repeated("--drop"),
+      dryRun: flags.has("--dry-run"),
       fold: flags.repeated("--fold").map(value => {
         const [proposalId, into] = splitPair("--fold", value);
         return { into, proposalId };
       }),
+      partial: flags.has("--partial"),
       strip: [...strip].map(([proposalId, stripPaths]) => ({ paths: stripPaths, proposalId })),
     };
   },
   buildRequest(input, { callerHarness, callerThreadId, cwd }) {
     return postWorkbenchAgentCommand("/api/git-checkpoint", {
-      action: "arcRestack", ...baseBody(callerHarness, callerThreadId, cwd), drop: input.drop, fold: input.fold, strip: input.strip,
+      action: "arcRestack", ...baseBody(callerHarness, callerThreadId, cwd),
+      drop: input.drop, dryRun: input.dryRun, fold: input.fold, partial: input.partial, strip: input.strip,
     }, "git-arc-restack");
   },
 });

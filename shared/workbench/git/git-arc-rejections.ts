@@ -74,14 +74,13 @@ const simpleMessages = {
   stackLayerInUse: "Other work builds on the affected stack layer.",
   emptyRestack: "The restack requests no changes.",
   invalidRestackTarget: "The restack names a proposal or edit it can't apply to this thread's pending stack.",
-  invalidFoldTarget: "A proposal can only fold into a pending proposal in its own or a lower stack layer.",
   invalidRestoreRef: "Restoring from a proposal needs selected files.",
 } as const;
 
 export const GitArcRejectionSchema = z.discriminatedUnion("reason", [
   z.object({ reason: z.enum(Object.keys(simpleMessages) as [keyof typeof simpleMessages, ...(keyof typeof simpleMessages)[]]) }).strict(),
   z.object({
-    reason: z.enum(["unclaimedRemoval", "conflictingClaimOperations", "adoptionRequiresUnclaimed", "adoptionRequiresDirty", "uncoveredDirtyClaims", "pathsOutsideClaims", "pathsInPendingProposal", "baselineChanged", "sealedStackContent", "restorePathsOutsideProposal"]),
+    reason: z.enum(["unclaimedRemoval", "conflictingClaimOperations", "adoptionRequiresUnclaimed", "adoptionRequiresDirty", "uncoveredDirtyClaims", "pathsOutsideClaims", "pathsInPendingProposal", "baselineChanged", "sealedStackContent", "restorePathsOutsideProposal", "restackChangedTip"]),
     paths: facts,
   }).strict(),
   z.object({ reason: z.literal("proposalNotFound"), proposalId: fact }).strict(),
@@ -117,6 +116,7 @@ const humanMessages = {
   proposalNotFound: "The requested proposal could not be found.",
   restackConflict: "A proposal's changes conflict with the restacked work beneath it.",
   proposalEmptied: "The restack would leave a proposal with no changes.",
+  restackChangedTip: "These folds would change the stack's resulting files, which folding alone must never do.",
   publishedCommit: "The commit is already published, so it can't be amended.",
   unknownWorkspaceRoot: "The selected project is not in this workspace.",
   rootNotRepository: "The selected project is not in a Git repository.",

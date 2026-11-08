@@ -1070,10 +1070,12 @@ export default class WorkbenchGitRepository {
     return merged.tree;
   }
 
+  /** `favorCurrent` resolves overlapping text hunks to `current` while still taking `stashed`'s other hunks. */
   async mergeWorktreeTrees(
     baseTreeish: string | null,
     currentTreeish: string | null,
     stashedTreeish: string,
+    { favorCurrent = false }: { favorCurrent?: boolean } = {},
   ): Promise<GitWorktreeMergeResult> {
     const [base, current, stashed] = await Promise.all([
       this.resolveTree(baseTreeish),
@@ -1081,7 +1083,7 @@ export default class WorkbenchGitRepository {
       this.resolveTree(stashedTreeish),
     ]);
     const result = await this.runWithInputResult([
-      "merge-tree", "--write-tree", "--name-only", "--messages", "-z", `--merge-base=${base}`, current, stashed,
+      "merge-tree", "--write-tree", "--name-only", "--messages", "-z", ...favorCurrent ? ["-Xours"] : [], `--merge-base=${base}`, current, stashed,
     ], "", { ...process.env, LC_ALL: "C" }, [0, 1]);
     const fields = result.stdout.split("\0");
     const tree = fields.shift()?.trim() ?? "";

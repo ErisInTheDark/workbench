@@ -190,7 +190,7 @@ constraints:
 </docs>
 <docs tools="git_arc_unstack git_arc_restack">
 <!-- Failure: removing work from mid-stack meant unstacking every layer above, rescinding, then reviving from the worktree, which bakes later file states into lower proposals. Restack rebuilds from proposal trees instead. -->
-- Sealed proposals may be amended or reworded. <tool id="git_arc_restack" /> drops, strips paths from, or folds pending proposals anywhere in the own stack in one atomic call; <tool id="git_arc_unstack" /> reopens the top layer when nothing builds on it
+- Sealed proposals may be amended or reworded. <tool id="git_arc_restack" /> drops, strips paths from, or folds pending proposals anywhere in the own stack in one atomic call; for large fold batches, preview with `dryRun`, then apply with `partial`. <tool id="git_arc_unstack" /> reopens the top layer when nothing builds on it
 </docs>
 <docs tools="git_arc_stack">
 - Amend proposals cannot build on a pending stack. Stash is unavailable while a stack is pending

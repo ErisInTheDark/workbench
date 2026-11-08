@@ -362,7 +362,7 @@ export default class WorkbenchGitCheckpointController {
       const repository = await WorkbenchGitRepository.open(input.cwd);
       const { replacements: _replacements, ...result } = await new GitArcStackEditor(repository, this.resolveThreadIdentity).apply(
         { harness: normalizeHarness(input.harness), threadId: input.threadId },
-        { drop: input.drop ?? [], fold: input.fold ?? [], strip: input.strip ?? [] },
+        { drop: input.drop ?? [], dryRun: input.dryRun ?? false, fold: input.fold ?? [], partial: input.partial ?? false, strip: input.strip ?? [] },
       );
       return result;
     });

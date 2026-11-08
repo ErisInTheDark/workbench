@@ -117,6 +117,7 @@ const EDIT_STEP_LABELS: Record<GitArcEditStep, StepLabels> = {
 
 const TRANSFER_LABELS = stepLabels("Transferring claims to", "Transferred claims to", "Failed to transfer claims to");
 const DISOWN_LABELS = stepLabels("Disowning", "Disowned", "Failed to disown");
+const RESTACK_CHECK_LABELS = stepLabels("Checking restack", "Checked restack", "Failed to check restack");
 const PLAN_AND_ADOPT_LABELS = stepLabels("Planning and adopting changes", "Planned and adopted changes", "Failed to plan and adopt changes");
 const ADOPT_INTO_PLAN_LABELS = stepLabels("Adopting changes into plan", "Adopted changes into plan", "Failed to adopt changes");
 const START_WITH_ADOPTED_LABELS = stepLabels("Adopting changes and starting", "Started with adopted changes", "Failed to adopt changes and start");
@@ -153,6 +154,7 @@ function labelsFor(intent: GitArcCommandIntent, adoptOnly: boolean, adoptWithSel
   if (intent.action === "edit" && intent.editStep) return EDIT_STEP_LABELS[intent.editStep];
   if (intent.action === "release" && intent.toSubagent) return TRANSFER_LABELS;
   if (intent.action === "release" && intent.disown) return DISOWN_LABELS;
+  if (intent.action === "restack" && intent.dryRun) return RESTACK_CHECK_LABELS;
   if (intent.action === "plan" && (adoptOnly || adoptWithSelected)) return adoptWithSelected ? PLAN_AND_ADOPT_LABELS : ADOPT_INTO_PLAN_LABELS;
   if (intent.action === "planStart" && (adoptOnly || adoptWithSelected)) return adoptWithSelected ? START_WITH_ADOPTED_LABELS : ADOPT_AND_START_LABELS;
   return ACTION_LABELS[intent.action];

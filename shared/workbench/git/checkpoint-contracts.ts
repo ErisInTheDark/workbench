@@ -11,7 +11,7 @@
  * - GitCheckpointCompareResultSchema/GitCheckpointCompareResult: local and workspace inspection results.
  * - GitArcStashResultSchema/GitArcStashResult: browser-safe stash and unstash lifecycle result.
  * - GitArcStackResultSchema/GitArcStackResult: sealed or reopened stack layer receipt.
- * - GitArcRestackEditsSchema/GitArcRestackEdits: drops, path strips and folds one restack applies together.
+ * - GitArcRestackEditsSchema/GitArcRestackEdits: drops, path strips and folds one restack applies together, optionally partially or as a dry run.
  * - GitArcClaimViewSchema/GitArcClaimView/GitArcClaimViewResultSchema/GitArcClaimViewResult: per-repository build view tree, held owners and mirror counts.
  * - GitArcHeldPathsSchema/GitArcHeldPaths/GitArcHeldPathsResultSchema/GitArcHeldPathsResult: per-repository held owners, the baseline tree holding their view bytes, and those bytes on request.
  * - GitCheckpointProposalSchema/GitCheckpointProposal: durable proposal presentation.
@@ -37,7 +37,9 @@ const rootId = nonEmptyString;
 
 export const GitArcRestackEditsSchema = z.object({
   drop: z.array(nonEmptyString).default([]),
+  dryRun: z.boolean().default(false),
   fold: z.array(z.object({ into: nonEmptyString, proposalId: nonEmptyString }).strict()).default([]),
+  partial: z.boolean().default(false),
   strip: z.array(z.object({ paths: checkpointPaths, proposalId: nonEmptyString }).strict()).default([]),
 }).strict();
 export type GitArcRestackEdits = z.infer<typeof GitArcRestackEditsSchema>;

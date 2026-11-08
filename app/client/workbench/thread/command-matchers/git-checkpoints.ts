@@ -70,6 +70,7 @@ export interface GitArcCommandIntent {
   adoptPaths?: string[];
   removePaths?: string[];
   disown?: boolean;
+  dryRun?: boolean;
   editStep?: GitArcEditStep;
   fromPlan?: boolean;
   intentName: string | null;
@@ -294,7 +295,7 @@ export function parseGitArcCommand(command: string): GitArcCommandIntent | null 
   if (action === "unstack") {
     return cursor === tokens.length ? { action, intentName: null, paths: [], ref: null } : null;
   }
-  if (action === "restack") return { action, intentName: null, paths: [], ref: null };
+  if (action === "restack") return { action, dryRun: tokens.slice(cursor).includes("--dry-run"), intentName: null, paths: [], ref: null };
   if (action === "adopt") {
     const [flag, value, ...extra] = tokens.slice(cursor);
     if (extra.length || !value || (flag !== "--name" && flag !== "--thread")) return null;

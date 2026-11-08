@@ -154,6 +154,8 @@ export type WorkbenchGitArcOperation = {
   adoptPaths?: string[];
   removePaths?: string[];
   disown?: boolean;
+  /** `restack` only reports what it would do. */
+  dryRun?: boolean;
   /** Edit session step requested by `edit`. */
   editStep?: GitArcEditStep;
   /** `release` selects the child's plan coverage; `paths` then holds plan additions. */
@@ -607,6 +609,7 @@ function renderGitArc(name: WorkbenchCommandPresentationName, args: { [key: stri
     ...(adoptPaths.length ? { adoptPaths } : {}),
     ...(removePaths.length ? { removePaths } : {}),
     ...(action === "release" ? { disown: readBoolean(args.disown) } : {}),
+    ...(action === "restack" ? { dryRun: readBoolean(args.dryRun) } : {}),
     ...(action === "release" && readString(args.toSubagent) ? { toSubagent: readString(args.toSubagent)! } : {}),
     ...(fromPlan ? { fromPlan } : {}),
     intentName,

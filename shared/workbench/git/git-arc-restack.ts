@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - GitArcRestackOutcomeSchema/GitArcRestackOutcome: what one restack did to one proposal, named by its title.
- * - GitArcRestackResultSchema/GitArcRestackResult: per-proposal restack outcomes, rewritten layers and released claims.
+ * - GitArcRestackResultSchema/GitArcRestackResult: per-proposal restack outcomes, rewritten layers and released claims, or what a dry run would do.
  * - formatGitArcRestackText/parseGitArcRestackText: the agent-read text of a restack, and its facts read back from it.
  */
 import { z } from "zod";
@@ -15,14 +15,23 @@ export const GitArcRestackOutcomeSchema = z.discriminatedUnion("status", [
   z.object({ ...titled, status: z.literal("rescinded") }).strict(),
   /** `stripped` lists the files that left the proposal; a replaced proposal may also be a fold target. */
   z.object({ ...titled, replacementId: nonEmptyString, status: z.literal("replaced"), stripped: z.array(nonEmptyString) }).strict(),
-  /** Folded into the proposal that `replacementId` now names. */
+  /** Folded wholly into the proposal that `replacementId` now names. */
   z.object({ ...titled, replacementId: nonEmptyString, status: z.literal("superseded"), stripped: z.array(nonEmptyString) }).strict(),
+  /** Partly folded into `replacementId`; `kept` files stay at the source's position in `residualId`. */
+  z.object({
+    ...titled, kept: z.array(nonEmptyString).min(1), replacementId: nonEmptyString, residualId: nonEmptyString,
+    status: z.literal("split"), stripped: z.array(nonEmptyString),
+  }).strict(),
+  /** A partial fold that could move nothing; the proposal stays in place under its own id. */
+  z.object({ ...titled, kept: z.array(nonEmptyString).min(1), status: z.literal("unmoved") }).strict(),
 ]);
 export type GitArcRestackOutcome = z.infer<typeof GitArcRestackOutcomeSchema>;
 
 const LayerSchema = z.object({ proposalIds: z.array(nonEmptyString), title: nonEmptyString }).strict();
 
 export const GitArcRestackResultSchema = z.object({
+  /** Nothing was written; replacement and residual ids are placeholders. */
+  dryRun: z.literal(true).optional(),
   /** Layers the restack rewrote, bottom first; lower layers and removed ones are omitted. */
   layers: z.array(LayerSchema),
   proposals: z.array(GitArcRestackOutcomeSchema),
@@ -32,11 +41,14 @@ export const GitArcRestackResultSchema = z.object({
 }).strict();
 export type GitArcRestackResult = z.infer<typeof GitArcRestackResultSchema>;
 
+const DRY_RUN_LINE = "dry run: nothing changed; new ids are placeholders";
+
 /** Layers and proposals print one JSON object per line: JSON escapes newlines, so titles cannot forge sections. */
 export function formatGitArcRestackText(input: GitArcRestackResult) {
   const result = GitArcRestackResultSchema.parse(input);
   return [
     `arc restack ${result.stackTip ?? "none"}`,
+    ...result.dryRun ? [DRY_RUN_LINE] : [],
     ...result.rootId ? [`root ${escapeGitArcValue(result.rootId)}`] : [],
     `layers ${result.layers.length}`, ...result.layers.map(layer => JSON.stringify(layer)),
     `proposals ${result.proposals.length}`, ...result.proposals.map(outcome => JSON.stringify(outcome)),
@@ -62,6 +74,10 @@ export function parseGitArcRestackText(output: string): GitArcRestackResult | nu
     while (index < lines.length) {
       const line = lines[index++]!;
       if (line === "end restack") return GitArcRestackResultSchema.parse(result);
+      if (line === DRY_RUN_LINE) {
+        result.dryRun = true;
+        continue;
+      }
       const space = line.indexOf(" ");
       const key = space < 0 ? line : line.slice(0, space);
       const value = space < 0 ? "" : line.slice(space + 1);

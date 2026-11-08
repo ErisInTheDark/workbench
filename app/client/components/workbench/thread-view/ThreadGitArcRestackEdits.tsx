@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - GitArcRestackEdit/GitArcRestackSummary: what one restack did, by proposal title.
- * - summarizeGitArcRestack: read drops, strips and folds (and what merely rebased) out of a restack's outcomes.
+ * - summarizeGitArcRestack: read drops, strips and folds (whole, split or unmoved, and what merely rebased) out of a restack's outcomes.
  * - default ThreadGitArcRestackEdits: those edits as rows; the full body tucks exact paths and rebased titles into inner
  *   disclosures, while a closed card's preview shows only the first rows.
  */
@@ -18,7 +18,8 @@ import ThreadClaimedFileList from "./ThreadClaimedFileList";
 export type GitArcRestackEdit =
   | { kind: "drop"; title: string }
   | { kind: "strip"; paths: readonly string[]; title: string }
-  | { into: string; kind: "fold"; title: string };
+  /** `kept` lists files a partial fold left at the source; `into` is null when nothing could move. */
+  | { into: string | null; kept: readonly string[]; kind: "fold"; title: string };
 
 export interface GitArcRestackSummary {
   edits: GitArcRestackEdit[];
@@ -29,6 +30,7 @@ export interface GitArcRestackSummary {
 export function summarizeGitArcRestack({ proposals, releasedClaims }: GitArcRestackResult): GitArcRestackSummary {
   // A fold's target is published under a new id; its replaced outcome names it.
   const replacementTitles = new Map(proposals.flatMap(outcome => outcome.status === "replaced" ? [[outcome.replacementId, outcome.title] as const] : []));
+  const titleOf = (id: string) => replacementTitles.get(id) ?? proposals.find(({ proposalId }) => proposalId === id)?.title ?? id;
   const drops: GitArcRestackEdit[] = [];
   const strips: GitArcRestackEdit[] = [];
   const folds: GitArcRestackEdit[] = [];
@@ -36,9 +38,11 @@ export function summarizeGitArcRestack({ proposals, releasedClaims }: GitArcRest
   for (const outcome of proposals) {
     if (outcome.status === "rebased") rebased.push(outcome.title);
     else if (outcome.status === "rescinded") drops.push({ kind: "drop", title: outcome.title });
+    else if (outcome.status === "unmoved") folds.push({ into: null, kept: outcome.kept, kind: "fold", title: outcome.title });
     else {
       if (outcome.stripped.length) strips.push({ kind: "strip", paths: outcome.stripped, title: outcome.title });
-      if (outcome.status === "superseded") folds.push({ into: replacementTitles.get(outcome.replacementId) ?? outcome.replacementId, kind: "fold", title: outcome.title });
+      if (outcome.status === "superseded") folds.push({ into: titleOf(outcome.replacementId), kept: [], kind: "fold", title: outcome.title });
+      if (outcome.status === "split") folds.push({ into: titleOf(outcome.replacementId), kept: outcome.kept, kind: "fold", title: outcome.title });
     }
   }
   return { edits: [...drops, ...strips, ...folds], rebased, releasedClaims };
@@ -53,7 +57,14 @@ const files = (count: number) => `${count} ${count === 1 ? "file" : "files"}`;
 function editText(edit: GitArcRestackEdit): ReactNode {
   if (edit.kind === "drop") return <>Dropped <Title>{edit.title}</Title></>;
   if (edit.kind === "strip") return <>Stripped {files(edit.paths.length)} from <Title>{edit.title}</Title></>;
-  return <>Folded <Title>{edit.title}</Title> into <Title>{edit.into}</Title></>;
+  if (edit.into === null) return <>Couldn't fold <Title>{edit.title}</Title>, kept {files(edit.kept.length)}</>;
+  return <>Folded <Title>{edit.title}</Title> into <Title>{edit.into}</Title>{edit.kept.length ? `, kept ${files(edit.kept.length)}` : null}</>;
+}
+
+/** Files the full body lists under an edit's row. */
+function editPaths(edit: GitArcRestackEdit) {
+  if (edit.kind === "strip") return edit.paths;
+  return edit.kind === "fold" ? edit.kept : [];
 }
 
 const EDIT_ICONS = {
@@ -80,9 +91,9 @@ export default function ThreadGitArcRestackEdits({ limit, summary }: {
   const remaining = summary.edits.length - shown.length;
   return (
     <div className="space-y-0.5 py-1.5" data-thread-git-arc-restack="true">
-      {shown.map((edit, index) => edit.kind === "strip" && limit === undefined ? (
-        <DetailRow icon={EDIT_ICONS.strip} key={index} summary={editText(edit)}>
-          <ThreadClaimedFileList inset={false} marker="dirty" paths={edit.paths} />
+      {shown.map((edit, index) => editPaths(edit).length && limit === undefined ? (
+        <DetailRow icon={EDIT_ICONS[edit.kind]} key={index} summary={editText(edit)}>
+          <ThreadClaimedFileList inset={false} marker="dirty" paths={editPaths(edit)} />
         </DetailRow>
       ) : (
         <DisclosureStaticRow className="!py-0.5" key={index} marker={EDIT_ICONS[edit.kind]} summary={editText(edit)} summaryClassName={ROW_TEXT} />

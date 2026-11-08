@@ -37,6 +37,8 @@ test("a restack card says what it dropped, stripped and folded by title, and kee
       { proposalId: "scripts", replacementId: "scripts-2", status: "replaced", stripped: [], title: "agent scripts" },
       { proposalId: "lilygen", status: "rescinded", title: "lilygen mod" },
       { proposalId: "removal", replacementId: "mapgen-2", status: "superseded", stripped: [], title: "remove lilygen" },
+      { kept: ["data/index.ts"], proposalId: "items", replacementId: "scripts-2", residualId: "items-2", status: "split", stripped: [], title: "items" },
+      { kept: ["Items.ts"], proposalId: "biomes", status: "unmoved", title: "biomes" },
     ],
     releasedClaims: ["mods/lilygen/Noise.ts"],
     stackTip: null,
@@ -46,8 +48,11 @@ test("a restack card says what it dropped, stripped and folded by title, and kee
   assert.deepEqual(restacked.restack?.edits, [
     { kind: "drop", title: "lilygen mod" },
     { kind: "strip", paths: ["mods/lilygen/Noise.ts"], title: "mapgen 2.16.0" },
-    { into: "mapgen 2.16.0", kind: "fold", title: "remove lilygen" },
+    { into: "mapgen 2.16.0", kept: [], kind: "fold", title: "remove lilygen" },
+    { into: "agent scripts", kept: ["data/index.ts"], kind: "fold", title: "items" },
+    { into: null, kept: ["Items.ts"], kind: "fold", title: "biomes" },
   ]);
+  assert.equal(card("restack", { intent: intent("restack", { dryRun: true }), restackResult }).label, "Checked restack");
   assert.deepEqual(restacked.restack?.rebased, ["dev server"]);
   assert.equal(restacked.preview?.kind, "restack");
   // Only a completed restack shows edits; a failed one's failure says why.

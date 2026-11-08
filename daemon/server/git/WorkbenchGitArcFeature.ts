@@ -1366,7 +1366,7 @@ export default class WorkbenchGitArcFeature {
       case "arcStack": return Response.json(await this.controller.stackArc({ ...common, stackChildThreadIds: stackFamily?.childThreadIds ?? [], title: input.title }));
       case "arcUnstack": return Response.json(await this.controller.unstackArc(common));
       case "arcRestack": return Response.json(await this.controller.restackArc({
-        ...common, drop: input.drop, fold: input.fold, strip: input.strip,
+        ...common, drop: input.drop, dryRun: input.dryRun, fold: input.fold, partial: input.partial, strip: input.strip,
       }));
       case "arcStash": return Response.json(await this.controller.stashArc(common));
       case "arcUnstash": return Response.json(await this.controller.unstashArc(common));

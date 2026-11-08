@@ -5,7 +5,7 @@
  * - CONTROLLER_OPERATIONS_FIXTURE: shared prepared histories for the controller battery.
  * - ControllerFixtureState: branch paths and prepared checkpoint/proposal identities.
  * - STACK_OPERATIONS_FIXTURE/StackFixtureState: prepared stack layer branches and their proposal identities.
- * - STACK_EDITOR_FIXTURE/StackEditorFixtureState: stacks whose layers share files, or seal one proposal twice, for revision and restack rebuilds.
+ * - STACK_EDITOR_FIXTURE/StackEditorFixtureState: stacks whose layers share files, seal one proposal twice, or span folds across conflicting layers, for revision and restack rebuilds.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -331,11 +331,13 @@ async function resealIntoTopLayer(root: string, proposalId: string) {
 
 export const STACK_EDITOR_FIXTURE = {
   commits: [{
-    files: { "doc.txt": "intro\n1\n2\n3\n4\n5\n6\n7\noutro\n", "lock.txt": "base\n", "shared.txt": "a\nb\nc\nd\ne\n" },
+    files: {
+      "doc.txt": "intro\n1\n2\n3\n4\n5\n6\n7\noutro\n", "lock.txt": "base\n", "shared.txt": "a\nb\nc\nd\ne\n", "span.txt": "1\n2\n3\n4\n5\n6\n7\n8\n9\n",
+    },
     message: "base",
   }],
   name: "stack-editor-states",
-  revision: 3,
+  revision: 4,
   prepare: async ({ bundleRoot, repositoryRoot }) => {
     const controller = new WorkbenchGitCheckpointController();
     const fork = async (name: string) => {
@@ -410,8 +412,42 @@ export const STACK_EDITOR_FIXTURE = {
     await controller.stackArc({ cwd: duplicate, threadId: "owner", title: "layer three" });
     await resealIntoTopLayer(duplicate, duplicateLower);
 
+    // span: layer one holds `target` (span line 1, target.txt) beside `sibling` (doc line 1); `middle` edits span line 2;
+    // `source` edits span lines 3 and 6, doc line 7 and adds source.txt; `extra` edits span line 9 and adds extra.txt.
+    // Line 3 touches middle's line 2, so moving it below middle conflicts; everything else merges cleanly.
+    const spanStack = async (name: string) => {
+      const cwd = await fork(name);
+      await controller.createAndStartPlan({
+        cwd, threadId: "owner", intentName: "span", paths: ["doc.txt", "extra.txt", "middle.txt", "source.txt", "span.txt", "target.txt"],
+      });
+      const lines = (edits: Record<number, string>) => Array.from({ length: 9 }, (_, index) => edits[index + 1] ?? String(index + 1)).join("\n") + "\n";
+      await write(cwd, "span.txt", lines({ 1: "1 t" }));
+      await write(cwd, "target.txt", "target\n");
+      const target = await propose(cwd, ["span.txt", "target.txt"], "target");
+      await write(cwd, "doc.txt", "intro\n1 sib\n2\n3\n4\n5\n6\n7\noutro\n");
+      const sibling = await propose(cwd, ["doc.txt"], "sibling");
+      await controller.stackArc({ cwd, threadId: "owner", title: "one" });
+      await write(cwd, "span.txt", lines({ 1: "1 t", 2: "2 m" }));
+      await write(cwd, "middle.txt", "middle\n");
+      const middle = await propose(cwd, ["middle.txt", "span.txt"], "middle");
+      await controller.stackArc({ cwd, threadId: "owner", title: "two" });
+      await write(cwd, "span.txt", lines({ 1: "1 t", 2: "2 m", 3: "3 s", 6: "6 s" }));
+      await write(cwd, "doc.txt", "intro\n1 sib\n2\n3\n4\n5\n6\n7 src\noutro\n");
+      await write(cwd, "source.txt", "source\n");
+      const source = await propose(cwd, ["doc.txt", "source.txt", "span.txt"], "source");
+      await controller.stackArc({ cwd, threadId: "owner", title: "three" });
+      await write(cwd, "span.txt", lines({ 1: "1 t", 2: "2 m", 3: "3 s", 6: "6 s", 9: "9 x" }));
+      await write(cwd, "extra.txt", "extra\n");
+      const extra = await propose(cwd, ["extra.txt", "span.txt"], "extra");
+      await controller.stackArc({ cwd, threadId: "owner", title: "four" });
+      return { extra, middle, root: relative(cwd), sibling, source, target };
+    };
+
     const relative = (root: string) => path.relative(bundleRoot, root);
     return {
+      spanDown: await spanStack("span-down"),
+      spanUp: await spanStack("span-up"),
+      spanUpPartial: await spanStack("span-up-partial"),
       duplicate: { extra, lower: duplicateLower, root: relative(duplicate), upper: duplicateUpper },
       ledger: { first, only, root: relative(ledger), second, third },
       mod: { feature, mod: modProposal, removal, root: relative(mod) },

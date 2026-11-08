@@ -1,7 +1,8 @@
 /*
  * Exports: none. Protect stack edits: revisions and restacks rebase later proposals by merge so layer tips keep every
  * proposal's work, publish atomically, never touch the worktree, return released paths to active claims, heal proposals
- * sealed twice, and reject only when they would change a file another thread holds. Also covers unstack and retention of inherited stack tips.
+ * sealed twice, fold in either direction, keep partial folds' conflicting files at their source, write nothing on dry
+ * runs, and reject only when they would change a file another thread holds. Also covers unstack and retention of inherited stack tips.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -65,7 +66,74 @@ test("restack rejections leave every Workbench ref unchanged", async () => {
   // The feature layer still edits a file only the dropped layer created.
   await rejects({ cwd, threadId: "owner", drop: [state.mod] }, "restackConflict");
   await rejects({ cwd, threadId: "owner", drop: [state.mod], strip: [{ proposalId: state.feature, paths: ["doc.txt", "feature.txt", "mod"] }] }, "proposalEmptied");
-  await rejects({ cwd, threadId: "owner", fold: [{ proposalId: state.mod, into: state.removal }] }, "invalidFoldTarget");
+  // Folding the mod up past the feature layer leaves the feature editing a file that no longer exists.
+  await rejects({ cwd, threadId: "owner", fold: [{ proposalId: state.mod, into: state.removal }] }, "restackConflict");
+});
+
+const SPAN_FILES = ["doc.txt", "extra.txt", "middle.txt", "source.txt", "span.txt", "target.txt"];
+
+test("partial folds move what merges cleanly, keep the rest at the source, and never change the stacked files", async () => {
+  const { cwd, refs, state, status, tipFiles, worktreeFiles } = branch("spanDown");
+  const { extra, middle, source, target } = state;
+  const [refsBefore, tipBefore, worktree] = [await refs(), await tipFiles(SPAN_FILES), await worktreeFiles(SPAN_FILES)];
+  // Line 3 touches middle's line 2, and doc.txt belongs to target's layer sibling.
+  await assert.rejects(controller.restackArc({ cwd, threadId: "owner", fold: [{ proposalId: source, into: target }] }), (error) => {
+    assert.ok(error instanceof GitArcRejectionError);
+    assert.deepEqual(error.rejection, { reason: "restackConflict", paths: ["span.txt", "doc.txt"], proposalId: source, title: "source" });
+    return true;
+  });
+  assert.deepEqual(await refs(), refsBefore);
+
+  const batch = { cwd, threadId: "owner", fold: [{ proposalId: source, into: target }, { proposalId: extra, into: middle }], partial: true };
+  const outcomeStatuses = (proposals: Array<{ proposalId: string; status: string }>) => new Map(proposals.map(({ proposalId, status: kind }) => [proposalId, kind]));
+  const expected = new Map([[extra, "superseded"], [middle, "replaced"], [source, "split"], [target, "replaced"]]);
+  const preview = await controller.restackArc({ ...batch, dryRun: true });
+  assert.equal(preview.dryRun, true);
+  assert.deepEqual(outcomeStatuses(preview.proposals), expected);
+  assert.deepEqual(await refs(), refsBefore, "a dry run writes nothing");
+
+  const result = await controller.restackArc(batch);
+  assert.deepEqual(outcomeStatuses(result.proposals), expected);
+  const replacementOf = (id: string) => {
+    const outcome = result.proposals.find(({ proposalId }) => proposalId === id);
+    assert.ok(outcome && "replacementId" in outcome);
+    return outcome;
+  };
+  const split = replacementOf(source);
+  assert.ok(split.status === "split");
+  assert.deepEqual(split.kept, ["doc.txt", "span.txt"]);
+  assert.equal(split.replacementId, replacementOf(target).replacementId);
+  assert.equal(replacementOf(extra).replacementId, replacementOf(middle).replacementId);
+  assert.deepEqual(result.layers.map(({ proposalIds }) => proposalIds.length), [2, 1, 1], "extra's layer emptied away");
+  // Target gains source.txt and source's line 6 hunk; line 3 stays in the residual.
+  const store = new GitCheckpointStore(await WorkbenchGitRepository.open(cwd));
+  const moved = await store.readProposal("codex", "owner", split.replacementId);
+  assert.deepEqual(moved.metadata.paths, ["source.txt", "span.txt", "target.txt"]);
+  const movedSpan = (await (await WorkbenchGitRepository.open(cwd)).readTreeFiles(moved.tree, ["span.txt"])).get("span.txt")?.bytes.toString("utf8");
+  assert.equal(movedSpan, "1 t\n2\n3\n4\n5\n6 s\n7\n8\n9\n");
+  assert.deepEqual([await status(source), await status(extra), await status(split.residualId)], ["superseded", "superseded", "proposed"]);
+  assert.deepEqual(await tipFiles(SPAN_FILES), tipBefore);
+  assert.deepEqual(await worktreeFiles(SPAN_FILES), worktree);
+});
+
+test("folding up merges the source into a later proposal, keeping the stacked files", async () => {
+  const { cwd, state, tipFiles } = branch("spanUp");
+  const tipBefore = await tipFiles(SPAN_FILES);
+  const result = await controller.restackArc({ cwd, threadId: "owner", fold: [{ proposalId: state.source, into: state.extra }] });
+  const folded = result.proposals.find(({ proposalId }) => proposalId === state.source);
+  assert.ok(folded?.status === "superseded");
+  assert.deepEqual(result.layers, [{ proposalIds: [folded.replacementId], title: "four" }]);
+  assert.deepEqual(await tipFiles(SPAN_FILES), tipBefore);
+});
+
+test("a partial upward fold keeps files later layers built on at the source", async () => {
+  const { cwd, state, tipFiles } = branch("spanUpPartial");
+  const tipBefore = await tipFiles(SPAN_FILES);
+  const result = await controller.restackArc({ cwd, threadId: "owner", fold: [{ proposalId: state.target, into: state.source }], partial: true });
+  const folded = result.proposals.find(({ proposalId }) => proposalId === state.target);
+  assert.ok(folded?.status === "split");
+  assert.deepEqual(folded.kept, ["span.txt"]);
+  assert.deepEqual(await tipFiles(SPAN_FILES), tipBefore);
 });
 
 test("a restack conflict names everything in the way, and exactly those strips and drops clear it", async () => {
