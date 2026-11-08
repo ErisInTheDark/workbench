@@ -1,6 +1,6 @@
 - Workbench MCP long waits survive scoped reloads without surfacing reload errors. Retiring success wins; otherwise the same request resumes in the current command generation.
 - Caller/tool cancellation, declared steer or dismissal rules, and full-process shutdown remain terminal.
 - Message waits return a selected sender's undelivered message even if it was admitted before the wait attached. Otherwise another sender's undelivered message interrupts them, whenever admitted.
-- Steer-interruptible waits attaching while their thread holds an undelivered steer or agent message are interrupted at once, as if it just arrived.
+- Steer-interruptible waits attaching while their thread holds an undelivered steer or agent message are interrupted at once, as if it just arrived. A message its model saw before admission returned is never undelivered.
 - A steer ends a shell's `yield_ms` window early; the command runs on for `shell_wait`. Plain shells and admitted commands are never steer-interrupted. Batch calls held behind an admitted `yield_ms` shell never mark their thread waiting; a queued one still does.
 - `request_user_input` also survives user steers and turns ending due to process interruption virtually.

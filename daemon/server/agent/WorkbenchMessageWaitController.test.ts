@@ -65,6 +65,23 @@ test("dependency reads survive detached reloads but exclude interrupted waits", 
   }
 });
 
+test("a steer delivered while still admitting never becomes mail, across a reload, while an unseen identical steer still does", () => {
+  const owner = new WorkbenchMessageWaitController();
+  const seen = owner.admitting("caller", message("first", "done"));
+  const unseen = owner.admitting("caller", message("first", "done"));
+  const successor = new WorkbenchMessageWaitController(owner.captureReloadState());
+  owner.dispose();
+  try {
+    successor.delivered("caller", message("first", "done"));
+    successor.admitted(seen, true);
+    assert.deepEqual(successor.undeliveredSenders("caller"), []);
+    successor.admitted(unseen, true);
+    assert.deepEqual(successor.undeliveredSenders("caller"), ["first"]);
+  } finally {
+    successor.dispose();
+  }
+});
+
 test("message waits ignore delivered earlier messages and other recipients, and retain the first matching reply", async () => {
   const owner = new WorkbenchMessageWaitController();
   const signal = new AbortController().signal;

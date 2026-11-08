@@ -31,7 +31,7 @@ export default class WorkbenchProviderDispatcher {
       nativeLocations: this.options.nativeLocations,
       instructionSelection: this.options.instructionSelection,
       messageAdmission: this.options.messageAdmission,
-      onAgentMessageAdmitted: this.options.onAgentMessageAdmitted,
+      trackAgentMessage: this.options.trackAgentMessage,
       renderAgentMessage: this.options.renderAgentMessage,
       holdAgentMessage: this.options.holdAgentMessage,
       awaitsQuestionnaireAnswer: this.options.awaitsQuestionnaireAnswer,

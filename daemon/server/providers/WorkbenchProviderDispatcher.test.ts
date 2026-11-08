@@ -16,6 +16,7 @@ import WorkbenchThreadAutoCompactController from "../turn/WorkbenchThreadAutoCom
 import WorkbenchThreadAdmissionController from "../thread/WorkbenchThreadAdmissionController";
 import { THREAD_AUTO_COMPACT_DEFAULTS } from "workbench-shared/workbench/settings/thread-auto-compact";
 import WorkbenchMessageWaitController from "../agent/WorkbenchMessageWaitController";
+import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
 import { getProcessWorkbenchAgentMcpRequestRegistry } from "../agent/workbench-agent-mcp-request-registry";
 import { listWorkbenchAgentCommands } from "../lib/workbench/commands/workbench-agent-command-registry";
 import { getWorkbenchAgentCommandToolName } from "../lib/workbench/commands/workbench-agent-command-definition";
@@ -36,6 +37,13 @@ const compaction = {
   adopt: async () => {},
   retireStranded: async () => {},
 };
+
+function trackIn(owner: WorkbenchMessageWaitController) {
+  return async (threadId: string, message: WorkbenchAgentMessage) => {
+    const admission = owner.admitting(threadId, message);
+    return { settle: async (steered: boolean) => { owner.admitted(admission, steered); } };
+  };
+}
 
 test("an agent message to a sidebar thread awaiting a questionnaire answer is held inside admission instead of starting a turn", async () => {
   const threadId = WorkbenchThreadIdSchema.parse("questionnaire-thread");
@@ -88,7 +96,7 @@ test("accepted agent messages wake matching message waits and end others without
     } } as unknown as WorkbenchProvider;
     const dispatcher = new WorkbenchProviderDispatcher(
       async (_definition, operation) => operation(provider),
-      { onAgentMessageAdmitted: (target, message) => { owner.receive(target, message); } },
+      { trackAgentMessage: trackIn(owner) },
     );
     const handle = dispatcher.get(harness);
     const waiter = owner.wait({
@@ -136,7 +144,7 @@ test("only steered agent messages wait in undelivered mail; one that starts a tu
   const owner = new WorkbenchMessageWaitController();
   const handle = new WorkbenchProviderDispatcher(
     async (_definition, operation) => operation(provider),
-    { interruptSteerWaits: () => undefined, onAgentMessageAdmitted: (target, message) => { owner.receive(target, message); } },
+    { interruptSteerWaits: () => undefined, trackAgentMessage: trackIn(owner) },
   ).get("claude");
   const send = () => handle.threads.messageAgent({
     threadId, cwd: "C:/repo", message: { senderThreadId: "child", senderName: "iris", message: "done" },
@@ -147,6 +155,26 @@ test("only steered agent messages wait in undelivered mail; one that starts a tu
     kind = "steered";
     await send();
     assert.deepEqual(owner.undeliveredSenders(threadId), ["child"]);
+  } finally {
+    owner.dispose();
+  }
+});
+
+test("a steer its model saw before admission returned never becomes undelivered mail", async () => {
+  const threadId = WorkbenchThreadIdSchema.parse("fast-recipient");
+  const message = { senderThreadId: "child", senderName: "iris", message: "done" };
+  const owner = new WorkbenchMessageWaitController();
+  const provider = { threads: { messageAgent: async () => {
+    owner.delivered(threadId, message);
+    return { kind: "steered", turnId: "turn" };
+  } } } as unknown as WorkbenchProvider;
+  const handle = new WorkbenchProviderDispatcher(
+    async (_definition, operation) => operation(provider),
+    { interruptSteerWaits: () => undefined, trackAgentMessage: trackIn(owner) },
+  ).get("claude");
+  try {
+    await handle.threads.messageAgent({ threadId, cwd: "C:/repo", message });
+    assert.deepEqual(owner.undeliveredSenders(threadId), []);
   } finally {
     owner.dispose();
   }

@@ -2,7 +2,9 @@
  * Exports:
  * - WorkbenchMessageWaitHandoff: data retained while message waits and undelivered mail re-enter replacement generations.
  * - WorkbenchMessageWaitOutcome: a selected sender's message, or an interruption by another sender's message.
- * - default WorkbenchMessageWaitController: own sender-filtered readiness, observable pending dependencies, undelivered mail and its senders, cancellation, and reload handoff.
+ * - WorkbenchAgentMessageAdmission: an agent message still inside provider admission, and whether its model already saw it.
+ * - default WorkbenchMessageWaitController: own sender-filtered readiness, observable pending dependencies, undelivered mail (from admission
+ *   start, so early deliveries count) and its senders, cancellation, and reload handoff.
  */
 import type { WorkbenchThreadId } from "workbench-shared/workbench/identity";
 import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
@@ -20,10 +22,19 @@ interface MessageWaitState {
   interrupted?: true;
 }
 
+/** An agent message whose provider admission has not returned yet; its model may see it before then. */
+export interface WorkbenchAgentMessageAdmission {
+  readonly threadId: string;
+  readonly message: WorkbenchAgentMessage;
+  delivered?: true;
+}
+
 export interface WorkbenchMessageWaitHandoff {
   readonly waits: Map<string, MessageWaitState>;
   /** Admitted messages the recipient's model has not seen yet, keyed by recipient thread; absent on older generations. */
   inbox?: Map<string, WorkbenchAgentMessage[]>;
+  /** Messages still inside provider admission; absent on older generations. */
+  admitting?: Set<WorkbenchAgentMessageAdmission>;
 }
 
 export type WorkbenchMessageWaitOutcome =
@@ -42,6 +53,7 @@ function sameMessage(left: WorkbenchAgentMessage, right: WorkbenchAgentMessage) 
 export default class WorkbenchMessageWaitController {
   private readonly handoff: WorkbenchMessageWaitHandoff;
   private readonly inbox: Map<string, WorkbenchAgentMessage[]>;
+  private readonly inFlight: Set<WorkbenchAgentMessageAdmission>;
   private readonly lifetime = new AbortController();
   private readonly listeners = new Map<string, () => void>();
   private readonly pendingListeners = new Set<() => void>();
@@ -49,6 +61,7 @@ export default class WorkbenchMessageWaitController {
   constructor(handoff?: WorkbenchMessageWaitHandoff) {
     this.handoff = handoff ?? { waits: new Map() };
     this.inbox = this.handoff.inbox ??= new Map();
+    this.inFlight = this.handoff.admitting ??= new Set();
   }
 
   captureReloadState() { return this.handoff; }
@@ -84,11 +97,30 @@ export default class WorkbenchMessageWaitController {
     }
   }
 
+  /** Track a message entering provider admission, so a delivery observed before admission returns still counts. */
+  admitting(threadId: string, message: WorkbenchAgentMessage): WorkbenchAgentMessageAdmission {
+    const admission = { threadId, message: { ...message } };
+    this.inFlight.add(admission);
+    return admission;
+  }
+
+  /** A steer its model has not seen yet becomes undelivered mail; a message that started a turn is that turn's prompt. */
+  admitted(admission: WorkbenchAgentMessageAdmission, steered: boolean) {
+    if (!this.inFlight.delete(admission) || !steered || admission.delivered) return;
+    this.receive(admission.threadId, admission.message);
+  }
+
   /** The recipient's model has seen the message, so no later wait may return it. */
   delivered(threadId: string, message: WorkbenchAgentMessage) {
     const pending = this.inbox.get(threadId);
     const index = pending?.findIndex(candidate => sameMessage(candidate, message)) ?? -1;
-    if (!pending || index < 0) return;
+    if (!pending || index < 0) {
+      const admission = [...this.inFlight].find(candidate => (
+        !candidate.delivered && candidate.threadId === threadId && sameMessage(candidate.message, message)
+      ));
+      if (admission) admission.delivered = true;
+      return;
+    }
     const remaining = pending.filter((_, candidate) => candidate !== index);
     if (remaining.length) this.inbox.set(threadId, remaining);
     else this.inbox.delete(threadId);

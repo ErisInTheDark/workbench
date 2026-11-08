@@ -193,9 +193,11 @@ function createWorkbenchCoreFeature(
     },
     instructionSelection: facts.instructionSelection,
     messageAdmission: autoCompact.run.bind(autoCompact),
-    onAgentMessageAdmitted: (threadId, message) => run(
-      "messages", owner => { owner.receive(threadId, message); }, "agent message admission",
-    ),
+    trackAgentMessage: async (threadId, message) => {
+      const admission = await run("messages", owner => owner.admitting(threadId, message), "agent message admission start");
+      // Settles on the current generation's owner, so waits attached after a reload still wake.
+      return { settle: steered => run("messages", owner => { owner.admitted(admission, steered); }, "agent message admission") };
+    },
     renderAgentMessage: async (harness, threadId, message, messageContext) => {
       if (!hasWorkbenchToolReferences(message.message)) return message;
       const subagent = Boolean(messageContext?.subagentName) || (await lookup.entry(threadId))?.entryKind === "subagent";

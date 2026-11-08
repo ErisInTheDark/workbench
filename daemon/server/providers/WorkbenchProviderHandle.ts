@@ -1,9 +1,10 @@
 /*
  * Exports:
  * - WorkbenchProviderMessageAdmission: one provider-chosen message outcome published after acceptance.
+ * - WorkbenchAgentMessageTracking: an agent message tracked across provider admission, settled with whether it steered.
  * - WorkbenchProviderHiddenTurn: a Workbench-started hidden turn and its in-lane supersession check.
  * - WorkbenchProviderNativeLocations: pending native session moves after project merges, and their settlement.
- * - WorkbenchProviderHandleOptions: post-admission hooks, agent-message rendering and holds, instruction selection, native relocation and shared message admission policy.
+ * - WorkbenchProviderHandleOptions: post-admission hooks, agent-message tracking, rendering and holds, instruction selection, native relocation and shared message admission policy.
  * - default WorkbenchProviderHandle: forward operations through the current definition lease, move a merged thread's native session
  *   before its next turn or compaction, supply thread instruction selections, admit compaction-queue deliveries inside their
  *   compaction's admission, hold agent messages for the user instead of compacting or dropping their held questionnaire, and wake waits
@@ -30,6 +31,11 @@ export interface WorkbenchProviderMessageAdmission {
   turnId: string;
 }
 
+/** An agent message tracked from before provider admission; settle once admission returns or fails. */
+export interface WorkbenchAgentMessageTracking {
+  settle(steered: boolean): Promise<void>;
+}
+
 export interface WorkbenchProviderHiddenTurn {
   threadId: string;
   clientMessageId: string;
@@ -51,8 +57,8 @@ export interface WorkbenchProviderHandleOptions {
   nativeLocations?: WorkbenchProviderNativeLocations;
   instructionSelection?: Pick<WorkbenchThreadInstructionSelectionController, "resolve" | "activateSkills" | "record">;
   messageAdmission?: WorkbenchThreadAutoCompactController["run"];
-  /** An agent message steered a live turn; its model sees it only at a later input boundary. */
-  onAgentMessageAdmitted?: (threadId: string, message: WorkbenchAgentMessage) => Promise<void> | void;
+  /** Before provider admission: track the message until admission settles, saying whether it steered a live turn. */
+  trackAgentMessage?: (threadId: string, message: WorkbenchAgentMessage) => Promise<WorkbenchAgentMessageTracking>;
   /** Before any delivery or hold: the message as its recipient reads it, with tool markup in that harness's own calls. */
   renderAgentMessage?: (
     harness: WorkbenchProviderKey, threadId: string, message: WorkbenchAgentMessage, context: WorkbenchMessageContext | undefined,
@@ -217,16 +223,22 @@ export default class WorkbenchProviderHandle implements WorkbenchProvider {
       const holdMessage = hold
         ? async (): Promise<WorkbenchAgentMessageResult> => { await hold(input.threadId, input.message); return { kind: "held" }; }
         : undefined;
-      const result: WorkbenchAgentMessageResult = await this.run(providerRegistrations[this.key], provider => this.admitMessage<WorkbenchAgentMessageResult>(
-        input.threadId, provider,
-        async () => holdMessage && await this.options.awaitsQuestionnaireAnswer?.(input.threadId)
-          ? await holdMessage()
-          : await this.withSelection(input.threadId, input.context, context => provider.threads.messageAgent({ ...input, ...(context ? { context } : {}) })),
-        holdMessage ? { hold: holdMessage } : undefined,
-      ), `${this.key}: threads.messageAgent`);
+      const tracking = await this.options.trackAgentMessage?.(input.threadId, input.message);
+      let steered = false;
+      let result: WorkbenchAgentMessageResult;
+      try {
+        result = await this.run(providerRegistrations[this.key], provider => this.admitMessage<WorkbenchAgentMessageResult>(
+          input.threadId, provider,
+          async () => holdMessage && await this.options.awaitsQuestionnaireAnswer?.(input.threadId)
+            ? await holdMessage()
+            : await this.withSelection(input.threadId, input.context, context => provider.threads.messageAgent({ ...input, ...(context ? { context } : {}) })),
+          holdMessage ? { hold: holdMessage } : undefined,
+        ), `${this.key}: threads.messageAgent`);
+        steered = result.kind === "steered";
+      } finally {
+        await tracking?.settle(steered);
+      }
       if (result.kind === "held") return result;
-      // A message that starts a turn is that turn's prompt, so the model already has it.
-      if (result.kind === "steered") await this.options.onAgentMessageAdmitted?.(input.threadId, input.message);
       const admitted = this.admitted(input.threadId, result, input.message.senderThreadId);
       await this.publishMessageAdmission(input.threadId, admitted);
       return admitted;

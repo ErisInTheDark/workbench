@@ -36,7 +36,9 @@ import type WorkbenchThreadIdentityController from "./WorkbenchThreadIdentityCon
 import type WorkbenchQuestionnaireController from "../interactions/WorkbenchQuestionnaireController";
 import type { WorkbenchQuestionnaireResponseStatePort } from "../interactions/WorkbenchQuestionnaireResponseController";
 import type { WorkbenchAgentMessage } from "workbench-shared/workbench/thread/thread-agent-message";
-import WorkbenchMessageWaitController, { type WorkbenchMessageWaitHandoff } from "../agent/WorkbenchMessageWaitController";
+import WorkbenchMessageWaitController, {
+  type WorkbenchAgentMessageAdmission, type WorkbenchMessageWaitHandoff,
+} from "../agent/WorkbenchMessageWaitController";
 import type { RemoteCall, RemoteCaller, SiblingRosterEntry } from "workbench-shared/workbench/network/network-remote-calls";
 import type { NetworkCaller } from "../network/WorkbenchNetworkAccessController";
 
@@ -98,6 +100,9 @@ export default class WorkbenchThreadMessageController {
   subscribePending(listener: () => void) { return this.waits.subscribePending(listener); }
 
   receive(threadId: string, message: WorkbenchAgentMessage) { this.waits.receive(threadId, message); }
+
+  admitting(threadId: string, message: WorkbenchAgentMessage) { return this.waits.admitting(threadId, message); }
+  admitted(admission: WorkbenchAgentMessageAdmission, steered: boolean) { this.waits.admitted(admission, steered); }
 
   delivered(threadId: string, message: WorkbenchAgentMessage) { this.waits.delivered(threadId, message); }
 
