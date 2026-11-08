@@ -652,7 +652,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                             `${threadPlaintextEditableClassName} min-h-[2.45rem] w-full rounded-lg px-3 py-2 text-[0.84em] leading-[1.5] text-text outline-none transition`,
                             customValue || isSoleFreeformQuestion
                               ? "bg-fg/4 py-3 mt-1 mb-3"
-                              : "hover:(bg-fg/4 py-3 mb-3) focus-visible:(bg-fg/4 py-3 mt-1 mb-3)",
+                              : "hover:(bg-fg/4 py-3 mb-3 after:(absolute inset-x-0 top-full h-3)) focus-visible:(bg-fg/4 py-3 mt-1 mb-3)",
                           )}
                           placeholder={isSoleFreeformQuestion ? "Write a response" : undefined}
                           spellCheck={!question.isSecret && (interactiveProps?.spellCheck ?? false)}
