@@ -39,6 +39,7 @@
     "index.d.ts",
     "store-definitions.mjs",
     "StoreCommandRunner.mjs",
+    "WorkbenchConfigError.mjs",
     "WorkbenchArcTree.mjs",
     "WorkbenchArcTree.d.mts",
     "arc-tree-manifest.mjs",

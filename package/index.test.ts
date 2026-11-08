@@ -1,11 +1,12 @@
 /*
- * No production exports. Tests dotenv mapping, named store replacement, and missing-value policies.
+ * No production exports. Tests dotenv mapping, named store replacement, store waits, and missing-value policies.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { config } from "./index.mjs";
+import { config, WorkbenchConfigError } from "./index.mjs";
+import { STORE_UNAVAILABLE_EXIT_CODE } from "./WorkbenchConfigError.mjs";
 import WorkbenchTemporaryDirectory from "../shared/WorkbenchTemporaryDirectory";
 
 // WB_STORES double-quoted arguments treat `\\` as one backslash.
@@ -201,12 +202,107 @@ test("required failures aggregate names without writing any environment values",
     path: file, processEnv, override: true, required: ["A", "B", "ABSENT"],
     warn: () => {},
   }), error => {
-    assert(error instanceof Error);
+    assert(error instanceof WorkbenchConfigError);
+    assert.deepEqual(error.missing, ["A", "B", "ABSENT"]);
     for (const name of ["A", "B", "ABSENT"]) assert.match(error.message, new RegExp(`\\b${name}\\b`));
     assert.doesNotMatch(error.message, /secret-key|updated|existing/);
     return true;
   });
   assert.deepEqual(processEnv, { GOOD: "existing" });
+});
+
+/** `down` is temporarily unavailable, `unset` is permanently absent, `up:N` answers after N unavailable attempts. */
+function storeRunner() {
+  const calls: string[] = [];
+  const attempts = new Map<string, number>();
+  return {
+    calls,
+    async run(argv: string[]) {
+      const key = argv[1]!;
+      calls.push(key);
+      const attempt = (attempts.get(key) ?? 0) + 1;
+      attempts.set(key, attempt);
+      const recoversAfter = key.startsWith("up:") ? Number(key.slice(3)) : null;
+      if (key === "down" || (recoversAfter !== null && attempt <= recoversAfter)) {
+        return { ok: false as const, reason: "exit", exitCode: STORE_UNAVAILABLE_EXIT_CODE };
+      }
+      if (key === "unset") return { ok: false as const, reason: "exit", exitCode: 1 };
+      return { ok: true as const, stdout: "secret\n" };
+    },
+  };
+}
+
+function countingDelay() {
+  const waits: number[] = [];
+  return { waits, delay: async (milliseconds: number) => { waits.push(milliseconds); } };
+}
+
+async function rejectsWith(promise: Promise<unknown>) {
+  try {
+    await promise;
+  } catch (error) {
+    assert(error instanceof WorkbenchConfigError);
+    return error;
+  }
+  assert.fail("config resolved");
+}
+
+test("store lookup failures reject with their reasons and only temporary unavailability is retryable", async t => {
+  const file = await envFile(t, "WB_STORES=test: lookup {key}\nDOWN=${test:down}\nUNSET=${test:unset}\nUNKNOWN=${unknown:key}\n");
+  const runner = storeRunner();
+  const processEnv: Record<string, string> = {};
+  const down = await rejectsWith(config({ path: file, processEnv, runner, required: ["DOWN"] }));
+  assert.deepEqual(down.lookupFailures, [{ name: "DOWN", store: "test", reason: "exit", exitCode: STORE_UNAVAILABLE_EXIT_CODE }]);
+  assert.equal(down.retryable, true);
+  assert.match(down.message, /DOWN \(test exited with 75\)/);
+  assert.deepEqual(processEnv, {});
+  for (const required of [["DOWN", "ABSENT"], ["DOWN", "UNSET"], ["UNKNOWN"]]) {
+    assert.equal((await rejectsWith(config({ path: file, processEnv, runner, required }))).retryable, false);
+  }
+  const unknown = await rejectsWith(config({ path: file, processEnv, runner, required: ["UNKNOWN"] }));
+  assert.deepEqual(unknown.lookupFailures, [{ name: "UNKNOWN", store: "unknown", reason: "unknown-store" }]);
+  assert.deepEqual(processEnv, {});
+});
+
+test("storeWaitMs retries only unavailable lookups until the store answers", async t => {
+  const file = await envFile(t, "WB_STORES=test: lookup {key}\nLATE=${test:up:2}\nREADY=${test:ready}\n");
+  const runner = storeRunner();
+  const { waits, delay } = countingDelay();
+  const warnings: string[] = [];
+  const processEnv: Record<string, string> = {};
+  await config({ path: file, processEnv, runner, delay, storeWaitMs: 10_000, required: ["LATE", "READY"], warn: message => warnings.push(message) });
+  assert.deepEqual(processEnv, { WB_STORES: "test: lookup {key}", LATE: "secret", READY: "secret" });
+  assert.equal(waits.length, 2);
+  assert.equal(runner.calls.filter(key => key === "ready").length, 1);
+  assert.equal(warnings.length, 1);
+});
+
+test("storeWaitMs never waits for permanent failures and gives up with a retryable error", async t => {
+  const unset = await envFile(t, "WB_STORES=test: lookup {key}\nUNSET=${test:unset}\n");
+  const down = await envFile(t, "WB_STORES=test: lookup {key}\nDOWN=${test:down}\n");
+  const { waits, delay } = countingDelay();
+  await rejectsWith(config({ path: unset, processEnv: {}, runner: storeRunner(), delay, storeWaitMs: 10_000, required: ["UNSET"] }));
+  assert.equal(waits.length, 0);
+  const runner = storeRunner();
+  const exhausted = await rejectsWith(config({ path: down, processEnv: {}, runner, delay, storeWaitMs: 2_500, required: ["DOWN"] }));
+  assert.equal(exhausted.retryable, true);
+  assert.equal(waits.length, 3);
+  assert.equal(runner.calls.filter(key => key === "down").length, 4);
+});
+
+test("aborting during a store wait rejects without environment writes", async t => {
+  const file = await envFile(t, "WB_STORES=test: lookup {key}\nDOWN=${test:down}\n");
+  const controller = new AbortController();
+  const reason = new Error("stopped");
+  const delay = async (_milliseconds: number, signal?: AbortSignal) => {
+    controller.abort(reason);
+    signal?.throwIfAborted();
+  };
+  const processEnv: Record<string, string> = {};
+  await assert.rejects(config({
+    path: file, processEnv, runner: storeRunner(), delay, signal: controller.signal, storeWaitMs: 10_000, required: ["DOWN"],
+  }), error => error === reason);
+  assert.deepEqual(processEnv, {});
 });
 
 test("optional mode requires other dotenv names and fills explicitly absent optional names", async t => {

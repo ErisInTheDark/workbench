@@ -1,7 +1,9 @@
 /*
  * Exports:
- * - WorkbenchConfigOptions: dotenv mapping, missing-value policies, cancellation and warning hooks.
+ * - WorkbenchConfigOptions: dotenv mapping, missing-value policies, store wait, cancellation and warning hooks.
  * - WorkbenchConfigOutput: mapped values after store replacement and policy checks, with the first file read error.
+ * - WorkbenchConfigLookupFailure: one failed store reference behind a missing name.
+ * - WorkbenchConfigError: rejection for missing required names; `retryable` marks temporarily unavailable stores.
  * - config: load and map dotenv values; resolve stores and check required names before environment writes.
  * - WorkbenchArcTree/WorkbenchArcTreeOptions/WorkbenchArcTreeRepository/WorkbenchArcTreeNodeEnvironmentOptions: arc tree types.
  * - arcTree: the worktree as the calling agent thread builds it, or the plain filesystem outside agent threads.
@@ -26,6 +28,11 @@ export type WorkbenchConfigOptions = {
   signal?: AbortSignal;
   /** Opt into bounded lookup warnings that never contain command output. Silent by default. */
   warn?: (message: string) => void;
+  /**
+   * Keep retrying store lookups that exit 75 (EX_TEMPFAIL: store temporarily unavailable, such as `wb store get` before
+   * Workbench is running) about once a second for roughly this many milliseconds. Other failures never wait. Defaults to 0.
+   */
+  storeWaitMs?: number;
 } & ({
   /** Only these names are required; all other dotenv variables are optional. Empty values count as supplied. */
   required?: readonly string[];
@@ -41,10 +48,27 @@ export interface WorkbenchConfigOutput {
   error?: Error;
 }
 
+export type WorkbenchConfigLookupFailure = {
+  /** Variable whose store reference failed. */
+  name: string;
+  store: string;
+  reason: "exit" | "missing-command" | "spawn-failed" | "output-limit" | "unknown-store" | "invalid-definitions";
+  /** Present when `reason` is `exit`; 75 means the store was temporarily unavailable. */
+  exitCode?: number;
+};
+
+/** Missing required names, with the store lookup failures behind them. Messages never contain keys, values or output. */
+export class WorkbenchConfigError extends Error {
+  readonly missing: readonly string[];
+  readonly lookupFailures: readonly WorkbenchConfigLookupFailure[];
+  /** True when every missing name failed only because its store was temporarily unavailable, so a later retry can succeed. */
+  get retryable(): boolean;
+}
+
 /**
  * Without a policy, unresolved references remain literal. With a policy, missing optional
  * variables become empty strings in their entirety. Missing required names reject together
- * before any environment writes. Existing environment values win unless override is set.
+ * with a WorkbenchConfigError before any environment writes. Existing environment values win unless override is set.
  */
 export function config(options?: WorkbenchConfigOptions): Promise<WorkbenchConfigOutput>;
 

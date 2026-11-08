@@ -27,6 +27,8 @@ const (
 	hookEnv            = "WORKBENCH_APPLY_PATCH_CLAIM_HOOK"
 	hookConnectTimeout = 2 * time.Second
 	agentCommandPath   = "/daemon/agent-command"
+	// sysexits EX_TEMPFAIL: package/index.mjs config retries or reports an unreachable daemon as temporary.
+	unavailableExitCode = 75
 )
 
 func main() {
@@ -54,7 +56,7 @@ func run(args []string) int {
 	origin, err := resolveOrigin()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Workbench daemon is unavailable: %v\n", err)
-		return failure(hook)
+		return unavailable(hook)
 	}
 	return dispatch(origin, cwd, args, hook)
 }
@@ -71,6 +73,13 @@ func failure(hook bool) int {
 		return 0
 	}
 	return 1
+}
+
+func unavailable(hook bool) int {
+	if hook {
+		return failure(hook)
+	}
+	return unavailableExitCode
 }
 
 // Running wb inside another Workbench checkout uses that checkout's own launcher.
@@ -172,7 +181,7 @@ func dispatch(origin string, cwd string, args []string, hook bool) int {
 	response, err := client.Post(origin+path, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Workbench daemon request failed: %v\n", err)
-		return failure(hook)
+		return unavailable(hook)
 	}
 	defer response.Body.Close()
 	succeeded := response.StatusCode >= 200 && response.StatusCode < 300
