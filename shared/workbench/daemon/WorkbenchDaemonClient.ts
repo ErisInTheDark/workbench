@@ -166,6 +166,9 @@ class WorkbenchDaemonClient {
     shell: {
       start: (params: WorkbenchDaemonParams<"thread/shell/start">) => this.request("thread/shell/start", params),
     },
+    subagent: {
+      takeBack: (params: WorkbenchDaemonParams<"thread/subagent/take-back">) => this.request("thread/subagent/take-back", params),
+    },
     goal: {
       set: (params: WorkbenchDaemonParams<"thread/goal/set">) => this.request("thread/goal/set", params),
       clear: (params: WorkbenchDaemonParams<"thread/goal/clear">) => this.request("thread/goal/clear", params),

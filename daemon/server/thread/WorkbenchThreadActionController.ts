@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchThreadActionOwners: shared identity, profile/state, project, virtual-steer and transcript owners.
- * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops and queue skips, user vis ends as transcript items, orphan repair, skills, goals, todos, addressed feedback, questionnaire hold, virtual-steer routing, compaction-queue adoption, agent messages held for the user, and steer redelivery.
+ * - default WorkbenchThreadActionController: own WB actions, full thread stop, user shell stops and queue skips, user vis ends as transcript items, taking back a child this thread promoted, orphan repair, skills, goals, todos, addressed feedback, questionnaire hold, virtual-steer routing, compaction-queue adoption, agent messages held for the user, and steer redelivery.
  */
 import { randomUUID } from "node:crypto";
 import type { ThreadPayload, WorkbenchHarness, WorkbenchPendingUserInputRequest, WorkbenchSkillSummary } from "workbench-shared/types";
@@ -10,7 +10,7 @@ import { createWorkbenchTextInput, WorkbenchUserInputSchema } from "workbench-sh
 import { WorkbenchThreadCreationNotDispatchedError } from "workbench-shared/workbench/provider/provider-thread";
 import {
   workbenchThreadActions, type WorkbenchThreadActionMap, type WorkbenchThreadCreate,
-  type WorkbenchThreadMessage, type WorkbenchThreadMessageSubmitResult,
+  type WorkbenchThreadMessage, type WorkbenchThreadMessageSubmitResult, type WorkbenchThreadPromotedChildTarget,
   type WorkbenchThreadRunningItemTarget, type WorkbenchThreadSteerTarget, type WorkbenchThreadStop,
 } from "workbench-shared/workbench/thread/thread-actions";
 import {
@@ -43,6 +43,7 @@ import {
   createWorkbenchAgentMessageText, readWorkbenchAgentMessageInput, type WorkbenchAgentMessage,
 } from "workbench-shared/workbench/thread/thread-agent-message";
 import { AGENT_HOLD_ENTRY_PREFIX } from "../database/transcript/workbench-transcript-types";
+import { findPromotedChild } from "workbench-shared/workbench/subagent/subagent-promotion";
 
 export interface WorkbenchThreadActionOwners {
   components: Pick<import("../skills/WorkbenchComponentsController").default, "extensions" | "images" | "keep" | "kept" | "results">;
@@ -75,6 +76,8 @@ export interface WorkbenchThreadActionOwners {
   todos: Pick<WorkbenchThreadTodoController, "add" | "remove" | "setRequired" | "setText">;
   addressedFeedback: Pick<WorkbenchThreadAddressedFeedbackController, "detach">;
   vis: Pick<import("../vis/WorkbenchVisController").default, "setControl" | "endById">;
+  /** Same-folder subagent relationships, for the user taking a promoted child back. */
+  subagents: Pick<import("../subagents/WorkbenchSubagentFeature").default, "takeBack">;
   /** Skills the thread's messages can activate; claimed activations are checked against them. */
   readSkills(threadId: string): Promise<readonly WorkbenchSkillSummary[]>;
   warn(message: string): void;
@@ -261,6 +264,7 @@ export default class WorkbenchThreadActionController {
     "thread/steer/dismiss": input => this.dismissSteer(input),
     "thread/call/stop": input => this.stopCall(input),
     "thread/shell/start": input => this.startShellNow(input),
+    "thread/subagent/take-back": input => this.takeBackSubagent(input),
   };
 
   async handle<Method extends keyof WorkbenchThreadActionMap>(method: Method, params: object, connectionId?: string) {
@@ -497,6 +501,21 @@ export default class WorkbenchThreadActionController {
   private async startShellNow(target: WorkbenchThreadRunningItemTarget) {
     const { threadId, references } = await this.runningItemReferences(target);
     if (!this.owners.shells.startShellNow(threadId, references)) throw new Error("This command is no longer queued.");
+    return { ok: true as const };
+  }
+
+  /** Only a child this thread's own completed promote item names may be taken back, so the item is the proof. */
+  private async takeBackSubagent({ threadId, itemId, childThreadId }: WorkbenchThreadPromotedChildTarget) {
+    const { identity } = await this.target(threadId);
+    const item = (await this.owners.transcripts.history(identity.threadId)).turns.flatMap(turn => turn.items)
+      .find(candidate => candidate.id === itemId);
+    const child = findPromotedChild(item, childThreadId);
+    if (!child) throw new Error("Only a thread this thread's completed promotion promoted can be taken back.");
+    const project = await this.owners.projects.resolveProjectById(identity.projectId);
+    await this.owners.subagents.takeBack({
+      cwd: project.rootPath, name: child.name, parentThreadId: identity.threadId,
+      childThreadId: WorkbenchThreadIdSchema.parse(childThreadId), projectId: identity.projectId,
+    });
     return { ok: true as const };
   }
 

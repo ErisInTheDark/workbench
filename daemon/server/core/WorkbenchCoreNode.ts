@@ -376,7 +376,7 @@ function createWorkbenchCoreFeature(
     providers, projects: projectCatalog, identities: threadIdentity,
     profiles: threadStateFeature, state: threadStateController,
     skills: facts.skills, components: facts.components, goals: facts.goals, todos: facts.todos, addressedFeedback: facts.addressedFeedback, vis,
-    readSkills: threadId => facts.readThreadSkills(threadId),
+    subagents, readSkills: threadId => facts.readThreadSkills(threadId),
     warn: message => logThreadStateWarning(message),
   });
   // A new turn retires the dead turns beneath it, then takes the agent messages they stranded.

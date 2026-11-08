@@ -87,6 +87,7 @@ export default function ThreadViewTranscript ({
     dismissSteer: itemId => active.actions.dismissSteer(itemId),
     stopCall: itemId => active.actions.stopCall(itemId),
     startShellNow: itemId => active.actions.startShellNow(itemId),
+    takeBackPromotedSubagent: (itemId, childThreadId) => active.actions.takeBackPromotedSubagent(itemId, childThreadId),
   }), [active.actions]);
 
   // Reconciles after every commit, including SQL's later prepend and skeleton removal.

@@ -81,6 +81,7 @@ function fixture(providerWarning?: string) {
     todos: { add: unused, remove: unused, setRequired: unused, setText: unused },
     addressedFeedback: { detach: unused },
     vis: { setControl: unused, endById: unused },
+    subagents: { takeBack: unused },
     readSkills: async () => [review],
     state: {
       getCanonicalThreadEntry: async () => null,

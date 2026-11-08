@@ -181,7 +181,7 @@ export interface GitCheckpointCommitCommandIntent {
 }
 
 export interface WorkbenchSubagentOperation {
-  action: "create" | "settle" | "stop" | "wait";
+  action: "create" | "promote" | "settle" | "stop" | "wait";
   message: string | null;
   name: string | null;
   profileId: string | null;
@@ -686,7 +686,7 @@ function renderSubagentQueue(action: "queue" | "dequeue", args: { [key: string]:
 }
 
 function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: string]: JsonValue | undefined }): WorkbenchCommandRoute {
-  const action = name.slice("subagent_".length) as "create" | "dequeue" | "list" | "profiles" | "queue" | "settle" | "stop" | "wait";
+  const action = name.slice("subagent_".length) as "approval" | "create" | "dequeue" | "list" | "profiles" | "promote" | "queue" | "settle" | "stop" | "wait";
   if (action === "queue" || action === "dequeue") return renderSubagentQueue(action, args);
   const names = readStringArray(args.names);
   const threadIds = readStringArray(args.threadIds);
@@ -703,11 +703,15 @@ function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: st
     || action === "wait"
     || action === "stop"
     || action === "settle"
+    || action === "promote"
   ) {
     const userVisibleSimpleVersion = action === "create"
       ? readString(args.userVisibleSimpleVersion)
       : null;
-    const ongoing = { create: "Creating subagent", settle: "Settling subagents", stop: "Stopping subagents", wait: "Waiting for subagents" }[action];
+    const ongoing = {
+      create: "Creating subagent", promote: "Promoting subagents", settle: "Settling subagents", stop: "Stopping subagents",
+      wait: "Waiting for subagents",
+    }[action];
     return specialized("workbench-cli.subagent", {
       kind: "subagent",
       operation: {
@@ -720,6 +724,11 @@ function renderSubagent(name: WorkbenchCommandPresentationName, args: { [key: st
         ...(userVisibleSimpleVersion ? { userVisibleSimpleVersion } : {}),
       },
     }, ongoing);
+  }
+  if (action === "approval") {
+    const decision = readString(args.decision) === "deny" ? "Denying" : "Forwarding";
+    return simple("workbench-cli.subagent", actionTarget(`${decision} approval for `, singleName ?? "subagent"),
+      actionTarget(`${decision === "Denying" ? "Denied" : "Forwarded"} approval for `, singleName ?? "subagent"));
   }
   const target = action === "list" ? "subagents" : "subagent profiles";
   return simple(

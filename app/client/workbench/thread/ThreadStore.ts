@@ -155,6 +155,8 @@ export interface ThreadStoreActions {
   stopCall(itemId: string): Promise<void>;
   /** Start a wb shell waiting in the expensive queue now, as though it was never expensive. */
   startShellNow(itemId: string): Promise<void>;
+  /** Make a sidebar thread this thread's promote item promoted its subagent again. */
+  takeBackPromotedSubagent(itemId: string, childThreadId: string): Promise<void>;
   submitQuestionnaire(response: WorkbenchUserInputResponse, options?: WorkbenchSubmitUserInputRequestOptions): Promise<void>;
   snooze(requestKey?: string): Promise<void>;
   changeAgent(value: string | null): void;

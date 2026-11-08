@@ -15,6 +15,7 @@
  * - WorkbenchThreadInterruptSchema/WorkbenchThreadInterrupt: interrupt that keeps a questionnaire waiting.
  * - WorkbenchThreadSteerTargetSchema/WorkbenchThreadSteerTarget: one held steer to resend or dismiss.
  * - WorkbenchThreadRunningItemTargetSchema/WorkbenchThreadRunningItemTarget: one running wb shell or stoppable call item for the user to stop.
+ * - WorkbenchThreadPromotedChildTargetSchema/WorkbenchThreadPromotedChildTarget: a child a promote item names, to take back.
  * - WorkbenchThreadHistoryReadSchema: thread history read, optionally narrowed to some turns.
  * - WorkbenchThreadGitCommitsReadSchema: accepted-commit details for named commit refs.
  * - WorkbenchThreadPayloadSchema: validate the public metadata envelope.
@@ -137,6 +138,12 @@ export const WorkbenchThreadRunningItemTargetSchema = WorkbenchThreadTargetSchem
   itemId: z.string().min(1),
 });
 export type WorkbenchThreadRunningItemTarget = z.infer<typeof WorkbenchThreadRunningItemTargetSchema>;
+/** A child this thread's `subagent_promote` item promoted, for the user to make its subagent again. */
+export const WorkbenchThreadPromotedChildTargetSchema = WorkbenchThreadTargetSchema.extend({
+  itemId: z.string().min(1),
+  childThreadId: z.string().min(1),
+});
+export type WorkbenchThreadPromotedChildTarget = z.infer<typeof WorkbenchThreadPromotedChildTargetSchema>;
 
 const threadEnvelope = z.object({
   id: threadId,
@@ -243,6 +250,7 @@ export const workbenchThreadActions = {
   "thread/steer/dismiss": { params: WorkbenchThreadSteerTargetSchema, result: ok },
   "thread/call/stop": { params: WorkbenchThreadRunningItemTargetSchema, result: ok },
   "thread/shell/start": { params: WorkbenchThreadRunningItemTargetSchema, result: ok },
+  "thread/subagent/take-back": { params: WorkbenchThreadPromotedChildTargetSchema, result: ok },
   "thread/goal/set": { params: WorkbenchThreadTargetSchema.extend({ objective: WorkbenchThreadGoalObjectiveSchema }), result: goalResult },
   "thread/goal/clear": { params: WorkbenchThreadTargetSchema, result: ok },
   "thread/todo/add": {

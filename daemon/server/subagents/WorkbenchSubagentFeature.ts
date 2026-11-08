@@ -1,8 +1,8 @@
 /*
  * Exports:
  * - WorkbenchSubagentFeatureContext: current-generation project, relationship, settle handover, promotion, approval and thread-state ports.
- * - default WorkbenchSubagentFeature: own the reloadable subagent controller, its cross-folder and cross-daemon children, and the
- *   durable relationship-store wrapper.
+ * - default WorkbenchSubagentFeature: own the reloadable subagent controller, its cross-folder and cross-daemon children, the
+ *   durable relationship-store wrapper, and the user taking a promoted child back.
  */
 import type { WorkbenchHarness, WorkbenchSubagentRelationship } from "workbench-shared/types";
 import type { WorkbenchThreadSidebarEntry, WorkbenchThreadStateRequest } from "workbench-shared/workbench/thread/thread-state";
@@ -117,6 +117,7 @@ export default class WorkbenchSubagentFeature {
     return this.controller.handleRequest(request, signal, invocation);
   }
   listRelationships(projectId: ProjectId) { return this.store.list({ projectId }); }
+  takeBack(input: Parameters<WorkbenchSubagentController["takeBack"]>[0]) { return this.controller.takeBack(input); }
   readRoster(threadId: WorkbenchThreadId) { return this.store.readRoster(threadId); }
   getOwned(parentThreadId: WorkbenchThreadId, projectId: ProjectId, threadId: WorkbenchThreadId) {
     return this.store.getOwned(parentThreadId, projectId, threadId);

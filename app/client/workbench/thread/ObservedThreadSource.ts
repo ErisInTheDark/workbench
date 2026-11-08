@@ -366,6 +366,10 @@ export default function createObservedThreadSource(
         try { await ports.daemon.threads.shell.start({ threadId, itemId }); }
         catch (error) { throw new Error(`The command could not be started: ${sanitize(error instanceof Error ? error.message : String(error)).slice(0, 300)}`); }
       },
+      async takeBackPromotedSubagent(itemId, childThreadId) {
+        try { await ports.daemon.threads.subagent.takeBack({ threadId, itemId, childThreadId }); }
+        catch (error) { throw new Error(sanitize(error instanceof Error ? error.message : String(error)).slice(0, 300)); }
+      },
       async submitQuestionnaire(response, options = {}) {
         const durable = readPending();
         if (!durable) throw new Error("There is no pending question for this thread.");

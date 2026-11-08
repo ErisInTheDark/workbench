@@ -44,6 +44,7 @@ import ThreadAgentMessageItem from "./ThreadAgentMessageItem";
 import MarkdownRender from "../../ui/MarkdownRender";
 import ThreadStatusCommandItem from "./ThreadStatusCommandItem";
 import ThreadSubagentCreateItem from "./ThreadSubagentCreateItem";
+import ThreadSubagentPromoteItem from "./ThreadSubagentPromoteItem";
 import ThreadSubagentTargetActionItem from "./ThreadSubagentTargetActionItem";
 import ThreadSubagentWaitItem from "./ThreadSubagentWaitItem";
 import ThreadTitleCommandItem from "./ThreadTitleCommandItem";
@@ -297,6 +298,22 @@ export default function ThreadWorkbenchCommandItem({
           }]}
         />
       </ThreadSubagentCreateItem>
+    );
+  }
+  if (subagentCommand.action === "promote" && targets.length) {
+    return (
+      <ThreadSubagentPromoteItem
+        durationMs={visibleDurationMs ?? null}
+        entries={targets.map((target) => ({
+          fallbackName: target.fallbackName,
+          subagent: target.subagent,
+          targetKey: target.targetKey,
+          thread: target.threadId ? relatedThreadsById[target.threadId] : undefined,
+        }))}
+        outcome={outcome}
+        itemId={item.id}
+        output={outcome === "inProgress" ? "" : output}
+      />
     );
   }
   if ((subagentCommand.action === "settle" || subagentCommand.action === "stop") && targets.length && outcome !== "failed") {

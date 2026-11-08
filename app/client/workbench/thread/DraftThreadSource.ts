@@ -127,6 +127,7 @@ export default function createDraftThreadSource(
       dismissSteer: unsupported("dismiss a steer"),
       stopCall: unsupported("stop a command"),
       startShellNow: unsupported("start a command"),
+      takeBackPromotedSubagent: unsupported("take back a subagent"),
       submitQuestionnaire: unsupported("answer a question"),
       snooze: unsupported("snooze a thread"),
       changeAgent: value => ports.controls.setCurrentThreadAgent(ports.draftId, value),

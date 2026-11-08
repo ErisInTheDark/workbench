@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - WorkbenchSubagentControllerOptions: provider operations, durable store, message-wait observations, settle handover ports and validated project dependencies.
- * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, per-child settlement with optional handover, one-way promotion into top-level threads, forwarding or denying children's approvals, and waits that end on caller abort or runtime drain; children in other folders or on other daemons go through WorkbenchRemoteSubagents.
+ * - default WorkbenchSubagentController: own durable parent-child metadata, authorization, cross-harness lifecycle, per-child settlement with optional handover, promotion into top-level threads and the user taking a promoted child back, forwarding or denying children's approvals, and waits that end on caller abort or runtime drain; children in other folders or on other daemons go through WorkbenchRemoteSubagents.
  */
 import { randomUUID } from "node:crypto";
 
@@ -40,6 +40,7 @@ import type WorkbenchRemoteSubagents from "./WorkbenchRemoteSubagents";
 import type { RemoteSubagentNetwork } from "./WorkbenchRemoteSubagents";
 import type { WorkbenchApprovalDecision, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
 import { resolveSubagentApproval, type SubagentApprovalChoice } from "./subagent-approvals";
+import { formatPromotedSubagent, formatUnpromotedSubagent } from "workbench-shared/workbench/subagent/subagent-promotion";
 
 interface PendingQuestionnaireList {
   data: Array<Omit<WorkbenchPendingUserInputRequest, "harness">>;
@@ -408,12 +409,7 @@ export default class WorkbenchSubagentController {
     const workbenchOrigin = typeof params.workbenchOrigin === "string" ? params.workbenchOrigin : undefined;
     let result: { threadId: WorkbenchThreadId } | null = null;
     const operation = this.createQueue.catch(() => undefined).then(async () => {
-      const currentRelationships = await this.subagentStore.list({ parentThreadId: caller.callerThreadId, projectId: caller.project.id });
-      const sameName = currentRelationships.subagents.filter((relationship) => relationship.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
-      for (const relationship of sameName) {
-        const entry = await this.threadState?.getEntry(caller.project.id, relationship.harness, relationship.threadId);
-        if (!entry || entry.entryKind !== "subagent" || !entry.lifecycle.settled) throw new Error(`An unsettled direct child already owns the name ${relationship.name}.`);
-      }
+      await this.assertChildNameFree(caller.callerThreadId, caller.project.id, name);
       const profile = (await this.profileStore.read()).profiles.find((candidate) => candidate.id === profileId);
       if (!profile || (profile.scope.kind === "project" && profile.scope.projectId !== caller.project.id)) throw new Error("That profile is not visible in this cwd project.");
       const reservationId = randomUUID();
@@ -463,6 +459,64 @@ export default class WorkbenchSubagentController {
     if (!result) throw new Error("Subagent creation did not return a thread id.");
     await this.pushRostersIfRemote(params, signal);
     return result;
+  }
+
+  private async assertChildNameFree(parentThreadId: WorkbenchThreadId, projectId: ProjectId, name: string) {
+    const relationships = await this.subagentStore.list({ parentThreadId, projectId });
+    const sameName = relationships.subagents.filter((relationship) => relationship.name.trim().toLocaleLowerCase() === name.toLocaleLowerCase());
+    for (const relationship of sameName) {
+      const entry = await this.threadState?.getEntry(projectId, relationship.harness, relationship.threadId);
+      if (!entry || entry.entryKind !== "subagent" || !entry.lifecycle.settled) throw new Error(`An unsettled direct child already owns the name ${relationship.name}.`);
+    }
+  }
+
+  /**
+   * The user undoing a parent's promotion: a same-folder sidebar thread becomes that parent's subagent again, keeping
+   * its turn and work, and the parent hears it from the child. The caller proves the parent promoted it.
+   */
+  async takeBack({ cwd, name, parentThreadId, childThreadId, projectId }: {
+    cwd: string; name: string; parentThreadId: WorkbenchThreadId; childThreadId: WorkbenchThreadId; projectId: ProjectId;
+  }) {
+    const operation = this.createQueue.catch(() => undefined).then(async () => {
+      const [parent, child] = await Promise.all([
+        this.identities.resolve({ threadId: parentThreadId }), this.identities.resolve({ threadId: childThreadId }),
+      ]);
+      const parentHarness = parent?.bindings[0]?.harness;
+      const childHarness = child?.bindings[0]?.harness;
+      if (!parentHarness || !childHarness || parent?.projectId !== projectId || child?.projectId !== projectId) {
+        throw new Error(`${name} is not in this thread's folder.`);
+      }
+      const relationships = await this.subagentStore.list({ projectId });
+      if (relationships.subagents.some(({ threadId }) => threadId === parentThreadId)) {
+        throw new Error("Workbench subagents cannot have subagents of their own.");
+      }
+      const entry = await this.threadState?.getEntry(projectId, childHarness, childThreadId);
+      if (entry?.entryKind !== "thread") throw new Error(`${name} is not a sidebar thread any more.`);
+      if (entry.lifecycle.settled || entry.metadata.archived) throw new Error(`${name} is settled or archived; restore it first.`);
+      await this.assertChildNameFree(parentThreadId, projectId, name);
+      const profileId = entry.profile?.kind === "profile" ? entry.profile.profileId : "";
+      const profileName = profileId ? (await this.profileStore.read()).profiles.find(profile => profile.id === profileId)?.name ?? "" : "";
+      const now = Date.now();
+      const reservationId = randomUUID();
+      const { reservationId: _reservationId, ...metadata } = await this.subagentStore.reserve({
+        createdAt: now, cwd, harness: childHarness, name, parentThreadId, profileId, profileName, projectId, reservationId,
+        title: entry.title, updatedAt: now,
+      });
+      const record = { ...metadata, threadId: childThreadId };
+      await this.subagentStore.replace(parentThreadId, reservationId, record);
+      await this.onRelationshipCommitted(record);
+      await this.provider(parentHarness).threads.messageAgent({
+        threadId: parentThreadId, cwd,
+        message: {
+          message: `The user made me (${name}, thread ${await this.publicThreadId(childThreadId, projectId)}) your subagent again. I keep my turn, claims and todos; manage and settle me like any child.`,
+          senderName: name,
+          senderThreadId: childThreadId,
+          userVisibleSimpleVersion: `${name} is a subagent again.`,
+        },
+      });
+    });
+    this.createQueue = operation.then(() => undefined, () => undefined);
+    await operation;
   }
 
   /** Every family change re-pushes the full sibling roster to children in other folders, so their daemons admit new siblings. */
@@ -734,9 +788,9 @@ export default class WorkbenchSubagentController {
         else if (this.promoteThread) await this.promoteThread(record.threadId);
         else throw new Error("promotion is unavailable in this runtime.");
         await this.subagentStore.remove(record.parentThreadId, record.threadId);
-        lines.push(`${record.name} is now a sidebar thread (${threadId}); you no longer manage it. Next: it now belongs to the user. If it holds unproposed claims, follow the cross subagents recipe: message this thread id once as a peer to hand over remaining work for scoped Git arc proposals.`);
+        lines.push(formatPromotedSubagent(record.name, threadId));
       } catch (error) {
-        lines.push(`${record.name} was not promoted: ${error instanceof Error ? error.message : String(error)}`);
+        lines.push(formatUnpromotedSubagent(record.name, error instanceof Error ? error.message : String(error)));
       }
     }
     if (caller) await this.requireRemote().pushRosters(caller, signal);

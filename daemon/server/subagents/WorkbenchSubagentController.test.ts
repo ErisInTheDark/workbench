@@ -101,6 +101,72 @@ test("promotion ends the relationship only for children whose thread actually be
   } finally { await controller.dispose(); }
 });
 
+test("taking back a promoted child relinks it under its parent and tells the parent", async () => {
+  const parentThreadId = identitySchemas.WorkbenchThreadIdSchema.parse("parent");
+  const childThreadId = identitySchemas.WorkbenchThreadIdSchema.parse("mira");
+  const sibling = (name: string, threadId: string): WorkbenchSubagentRelationship => ({
+    createdAt: 1, updatedAt: 1, cwd: "C:/repo", directSubagentIndex: 0, harness: "codex", name, parentThreadId, projectId,
+    threadId: identitySchemas.WorkbenchThreadIdSchema.parse(threadId), profileId: "profile", profileName: "profile", title: name,
+  });
+  let relationships: WorkbenchSubagentRelationship[] = [];
+  let entries: Record<string, object> = {};
+  const replaced: WorkbenchSubagentRelationship[] = [];
+  const committed: string[] = [];
+  const messages: Array<{ threadId: string; senderThreadId: string }> = [];
+  const controller = new WorkbenchSubagentController({
+    provider: () => ({
+      threads: { messageAgent: async ({ threadId, message }: { threadId: string; message: { senderThreadId: string } }) => {
+        messages.push({ threadId, senderThreadId: message.senderThreadId });
+      } },
+    }) as never,
+    stopThread: async () => { throw new Error("No thread stop is needed."); },
+    onRelationshipCommitted: async record => { committed.push(record.threadId); },
+    identities: {
+      knownThread: (threadId: string) => ({ threadId }) as never,
+      resolve: async ({ threadId }: { threadId: string }) => ({ threadId, projectId, bindings: [{ harness: "codex" }] }) as never,
+    },
+    publicThreadId: async threadId => identitySchemas.WorkbenchThreadIdSchema.parse(threadId),
+    profileStore: { read: async () => ({ profiles: [] }), mutate: async () => { throw new Error("Unexpected profile mutation."); } },
+    resolveProjectFromCwd: async () => { throw new Error("Take back is not an agent call."); },
+    subagentStore: {
+      getOwnedMany: async () => [],
+      list: async ({ parentThreadId: parent }: { parentThreadId?: string | null }) => ({
+        nextCursor: null, subagents: relationships.filter(record => !parent || record.parentThreadId === parent),
+      }),
+      remove: async () => {},
+      replace: async (_parent, _reservation, record) => { replaced.push(record); },
+      reserve: async record => ({ ...record, directSubagentIndex: 3 }),
+    },
+    threadState: {
+      getEntry: async (_project: string, _harness: string, threadId: string) => entries[threadId] ?? null,
+    } as never,
+  });
+  const topLevel = { entryKind: "thread", title: "Fix tooltip z-order", lifecycle: { settled: false }, metadata: { archived: false } };
+  const takeBack = () => controller.takeBack({ cwd: "C:/repo", name: "Mira", parentThreadId, childThreadId, projectId });
+  try {
+    entries = { parent: { ...topLevel, title: "Parent" }, mira: topLevel };
+    relationships = [sibling("Mira", "other-mira")];
+    entries["other-mira"] = { entryKind: "subagent", lifecycle: { settled: false } };
+    await assert.rejects(takeBack(), /already owns the name Mira/u);
+
+    entries["other-mira"] = { entryKind: "subagent", lifecycle: { settled: true } };
+    await takeBack();
+    assert.deepEqual(replaced.map(({ threadId, name, parentThreadId: parent, directSubagentIndex }) => ({ threadId, name, parent, directSubagentIndex })),
+      [{ threadId: childThreadId, name: "Mira", parent: parentThreadId, directSubagentIndex: 3 }]);
+    assert.deepEqual(committed, [childThreadId]);
+    assert.deepEqual(messages, [{ threadId: parentThreadId, senderThreadId: childThreadId }]);
+
+    entries.mira = { entryKind: "subagent", lifecycle: { settled: false } };
+    await assert.rejects(takeBack(), /not a sidebar thread/u);
+    entries.mira = { ...topLevel, lifecycle: { settled: true } };
+    await assert.rejects(takeBack(), /settled/u);
+    entries.mira = topLevel;
+    relationships = [{ ...sibling("Parent", "parent"), parentThreadId: identitySchemas.WorkbenchThreadIdSchema.parse("grandparent") }];
+    await assert.rejects(takeBack(), /subagents cannot/u);
+    assert.equal(replaced.length, 1);
+  } finally { await controller.dispose(); }
+});
+
 test("Git adoption names resolve only an unsettled unlocked direct child", async () => {
   const parentThreadId = identitySchemas.WorkbenchThreadIdSchema.parse("parent");
   const childThreadId = identitySchemas.WorkbenchThreadIdSchema.parse("child");
