@@ -1,7 +1,8 @@
 /*
  * Exports:
  * - default GitArcStackEditor: rewrite an owner's pending proposals and the stack layers above the lowest edit in one ref
- *   transaction, rebasing later proposals by three-way merging their own changes; never reads or writes the worktree.
+ *   transaction, rebasing later proposals by three-way merging their own changes and dropping higher copies of proposals
+ *   sealed twice; never reads or writes the worktree.
  * - GitArcStackEdit: drops, strips, folds or one revision that a single rewrite applies together.
  * - GitArcStackEditResult: per-proposal outcomes, rewritten layers, stack tip and paths returned to active claims.
  */
@@ -121,12 +122,21 @@ export default class GitArcStackEditor {
       .map(async id => await store.readProposal(identity.harness, identity.threadId, id)));
     groups.push({ layer: null, proposals: unsealed.filter(({ metadata }) => metadata.status === "proposed" && !metadata.messageOnly) });
 
+    // Chain reads once stopped 200 layers deep, so deep stacks resealed their lowest proposals at the top, overwriting
+    // later work with those proposals' old trees. The lowest copy is the real one; higher copies drop when rebuilt.
     const located = new Map<string, number>();
     const byId = new Map<string, StoredProposal>();
+    const duplicateLayers: number[] = [];
     groups.forEach(({ proposals }, index) => proposals.forEach((proposal) => {
-      located.set(proposal.metadata.proposalId, index);
-      byId.set(proposal.metadata.proposalId, proposal);
+      const id = proposal.metadata.proposalId;
+      if (located.has(id)) {
+        duplicateLayers.push(index);
+        return;
+      }
+      located.set(id, index);
+      byId.set(id, proposal);
     }));
+    const isCopy = (proposal: StoredProposal, index: number) => located.get(proposal.metadata.proposalId) !== index;
     const locate = (proposalId: string) => {
       const index = located.get(proposalId);
       const group = index === undefined ? undefined : groups[index];
@@ -140,7 +150,7 @@ export default class GitArcStackEditor {
       return index;
     };
     const editedIds = [...drop, ...strip.keys(), ...foldSources.keys(), ...foldSources.values(), ...edit.revise ? [edit.revise.proposalId] : []];
-    const startIndex = Math.min(...editedIds.map(locate));
+    const startIndex = Math.min(...editedIds.map(locate), ...duplicateLayers);
     for (const [source, into] of foldSources) {
       if (source === into || drop.has(into) || foldSources.has(into) || drop.has(source)) {
         invalid(`Proposal ${source} cannot fold into ${into}.`);
@@ -204,10 +214,11 @@ export default class GitArcStackEditor {
     let baseChanged = false;
     /** Commits that remain stack tips; a proposal built on one records it as its stack base. */
     const layerTips = new Set(chain.slice(0, startIndex).map(({ tipCommit }) => tipCommit));
-    for (const group of groups.slice(startIndex)) {
+    for (const [offset, group] of groups.slice(startIndex).entries()) {
       const results: Rebuilt[] = [];
       for (const proposal of group.proposals) {
         const id = proposal.metadata.proposalId;
+        if (isCopy(proposal, startIndex + offset)) continue;
         if (drop.has(id)) {
           released.push(...proposal.metadata.paths);
           continue;
@@ -364,20 +375,18 @@ export default class GitArcStackEditor {
         proposalId: id, replacementId: result.newId, status: "replaced", stripped: strippedById.get(id) ?? [], title: messageOf(proposal).title,
       });
     }
-    for (const group of groups) {
-      for (const proposal of group.proposals) {
-        const id = proposal.metadata.proposalId;
-        const remapped = remapProposalMetadata(proposal.metadata, commits);
-        if (drop.has(id)) {
-          await settle(proposal, { ...remapped, status: "rescinded", unavailableReason: null });
-          outcomes.push({ proposalId: id, status: "rescinded", title: proposal.metadata.title });
-        }
-        const into = foldSources.get(id);
-        if (into) {
-          const replacementId = replace.get(into)!;
-          await settle(proposal, { ...remapped, status: "superseded", supersededByProposalId: replacementId, supersededBySha: null, unavailableReason: null });
-          outcomes.push({ proposalId: id, replacementId, status: "superseded", stripped: strippedById.get(id) ?? [], title: proposal.metadata.title });
-        }
+    for (const proposal of byId.values()) {
+      const id = proposal.metadata.proposalId;
+      const remapped = remapProposalMetadata(proposal.metadata, commits);
+      if (drop.has(id)) {
+        await settle(proposal, { ...remapped, status: "rescinded", unavailableReason: null });
+        outcomes.push({ proposalId: id, status: "rescinded", title: proposal.metadata.title });
+      }
+      const into = foldSources.get(id);
+      if (into) {
+        const replacementId = replace.get(into)!;
+        await settle(proposal, { ...remapped, status: "superseded", supersededByProposalId: replacementId, supersededBySha: null, unavailableReason: null });
+        outcomes.push({ proposalId: id, replacementId, status: "superseded", stripped: strippedById.get(id) ?? [], title: proposal.metadata.title });
       }
     }
 

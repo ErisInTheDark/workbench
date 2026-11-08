@@ -5,12 +5,13 @@
  * - CONTROLLER_OPERATIONS_FIXTURE: shared prepared histories for the controller battery.
  * - ControllerFixtureState: branch paths and prepared checkpoint/proposal identities.
  * - STACK_OPERATIONS_FIXTURE/StackFixtureState: prepared stack layer branches and their proposal identities.
- * - STACK_EDITOR_FIXTURE/StackEditorFixtureState: stacks whose layers share files, for revision and restack rebuilds.
+ * - STACK_EDITOR_FIXTURE/StackEditorFixtureState: stacks whose layers share files, or seal one proposal twice, for revision and restack rebuilds.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import GitArcRegistry from "./GitArcRegistry";
+import GitArcStackController from "./GitArcStackController";
 import GitCheckpointStore from "./GitCheckpointStore";
 import type { GitTestFixtureSpec } from "./GitTestFixtureCache";
 import WorkbenchGitCheckpointController from "./WorkbenchGitCheckpointController";
@@ -305,13 +306,36 @@ export const STACK_OPERATIONS_FIXTURE = {
 
 export type StackFixtureState = Awaited<ReturnType<typeof STACK_OPERATIONS_FIXTURE.prepare>>;
 
+/** Rewrite the top stack layer to seal `proposalId` again from its own stale tree, as deep stacks did while chain reads were capped. */
+async function resealIntoTopLayer(root: string, proposalId: string) {
+  const repository = await WorkbenchGitRepository.open(root);
+  const store = new GitCheckpointStore(repository);
+  const registry = new GitArcRegistry(repository);
+  const entry = await registry.find({ harness: "codex", threadId: "owner" });
+  if (!entry?.stackTip) throw new Error("The fixture owner has no stack.");
+  const chain = await new GitArcStackController(repository).readChain(entry.stackTip);
+  const summary = chain.flatMap(({ layer }) => layer.proposals ?? []).find(candidate => candidate.proposalId === proposalId);
+  const top = await store.readCheckpoint("codex", "owner", entry.stackTip);
+  const layer = top.metadata?.stackLayer;
+  if (!summary || !top.metadata || !layer) throw new Error("The fixture stack is missing its sealed proposal.");
+  const proposal = await store.readProposal("codex", "owner", proposalId);
+  const tree = await repository.writeTreeWithPathsFromSource(entry.stackTip, proposal.proposalCommit, proposal.metadata.paths);
+  const prepared = await store.prepareCheckpoint("codex", "owner", tree, top.parent, {
+    ...top.metadata,
+    scopePaths: [...new Set([...proposal.metadata.paths, ...top.metadata.scopePaths])].sort(),
+    stackLayer: { ...layer, proposalIds: [proposalId, ...layer.proposalIds], proposals: [summary, ...layer.proposals ?? []] },
+  });
+  await repository.updateRefs([prepared.update], [{ oldValue: entry.stackTip, ref: top.checkpointRef }]);
+  await registry.set({ ...entry, stackTip: prepared.checkpointCommit }, entry.checkpointCommit);
+}
+
 export const STACK_EDITOR_FIXTURE = {
   commits: [{
     files: { "doc.txt": "intro\n1\n2\n3\n4\n5\n6\n7\noutro\n", "lock.txt": "base\n", "shared.txt": "a\nb\nc\nd\ne\n" },
     message: "base",
   }],
   name: "stack-editor-states",
-  revision: 2,
+  revision: 3,
   prepare: async ({ bundleRoot, repositoryRoot }) => {
     const controller = new WorkbenchGitCheckpointController();
     const fork = async (name: string) => {
@@ -371,8 +395,24 @@ export const STACK_EDITOR_FIXTURE = {
     const third = await layer("third", "3", true);
     const only = await layer("only", "4", false);
 
+    // duplicate: layer one edits shared.txt, layer two edits it again, layer three adds extra.txt and re-seals layer one's
+    // proposal, reverting shared.txt to layer one's content.
+    const duplicate = await fork("duplicate");
+    await controller.createAndStartPlan({ cwd: duplicate, threadId: "owner", intentName: "duplicate", paths: ["extra.txt", "shared.txt"] });
+    await write(duplicate, "shared.txt", "A\nb\nc\nd\ne\n");
+    const duplicateLower = await propose(duplicate, ["shared.txt"], "lower");
+    await controller.stackArc({ cwd: duplicate, threadId: "owner", title: "layer one" });
+    await write(duplicate, "shared.txt", "A\nb\nc\nd\nE\n");
+    const duplicateUpper = await propose(duplicate, ["shared.txt"], "upper");
+    await controller.stackArc({ cwd: duplicate, threadId: "owner", title: "layer two" });
+    await write(duplicate, "extra.txt", "extra\n");
+    const extra = await propose(duplicate, ["extra.txt"], "extra");
+    await controller.stackArc({ cwd: duplicate, threadId: "owner", title: "layer three" });
+    await resealIntoTopLayer(duplicate, duplicateLower);
+
     const relative = (root: string) => path.relative(bundleRoot, root);
     return {
+      duplicate: { extra, lower: duplicateLower, root: relative(duplicate), upper: duplicateUpper },
       ledger: { first, only, root: relative(ledger), second, third },
       mod: { feature, mod: modProposal, removal, root: relative(mod) },
       shared: { lower, root: relative(shared), upper },

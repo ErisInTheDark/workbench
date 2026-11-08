@@ -1,7 +1,7 @@
 /*
  * Exports: none. Protect stack edits: revisions and restacks rebase later proposals by merge so layer tips keep every
- * proposal's work, publish atomically, never touch the worktree, return released paths to active claims, and reject
- * only when they would change a file another thread holds. Also covers unstack and retention of inherited stack tips.
+ * proposal's work, publish atomically, never touch the worktree, return released paths to active claims, heal proposals
+ * sealed twice, and reject only when they would change a file another thread holds. Also covers unstack and retention of inherited stack tips.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -120,6 +120,18 @@ test("restack drops, strips and folds in one transaction without touching the wo
   const claims = await controller.readStatus({ cwd, threadId: "owner" });
   assert.ok(result.releasedClaims.every(file => [...claims.dirtyClaims, ...claims.cleanClaims].includes(file)),
     "dropped and stripped paths return to active claims");
+});
+
+test("restack keeps only the lowest copy of a proposal sealed twice, dropping the stale content its higher copy carried", async () => {
+  const { cwd, state, tipFiles } = branch("duplicate");
+  const result = await controller.restackArc({ cwd, threadId: "owner", fold: [{ proposalId: state.upper, into: state.lower }] });
+  const replacement = result.proposals.find(outcome => outcome.proposalId === state.lower);
+  assert.ok(replacement && "replacementId" in replacement);
+  assert.deepEqual(result.layers, [
+    { proposalIds: [replacement.replacementId], title: "layer one" },
+    { proposalIds: [state.extra], title: "layer three" },
+  ]);
+  assert.deepEqual(await tipFiles(["extra.txt", "shared.txt"]), { "extra.txt": "extra\n", "shared.txt": "A\nb\nc\nd\nE\n" });
 });
 
 /**
