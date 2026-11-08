@@ -12,7 +12,8 @@ import (
 	"strings"
 
 	"github.com/miekg/dns"
-	"tailscale.com/types/netmap"
+	"tailscale.com/ipn/ipnstate"
+	"tailscale.com/tailcfg"
 )
 
 type tailnetNameserver struct {
@@ -23,21 +24,32 @@ type tailnetNameserver struct {
 
 type tailnetDNS struct {
 	Nameservers []tailnetNameserver `json:"nameservers"`
+	// Every network member address with its reachability, so unlisted members can be judged as candidates.
+	Members []tailnetNameserver `json:"members"`
 }
 
-// privateDNSRoute reads the split-DNS nameservers the tailnet sends private names to, as every client sees them.
-func privateDNSRoute(network *netmap.NetworkMap) *tailnetDNS {
-	if network == nil { return nil }
+// privateDNSRoute reads the split-DNS nameservers the tailnet sends private names to, as every client sees them,
+// with each one's and each member address's reachability from the node's status.
+func privateDNSRoute(config *tailcfg.DNSConfig, status *ipnstate.Status, members []string) *tailnetDNS {
+	if config == nil { return nil }
 	online := map[netip.Addr]bool{}
-	if network.SelfNode.Valid() {
-		for _, prefix := range network.SelfNode.Addresses().All() { online[prefix.Addr()] = true }
+	if status != nil {
+		if status.Self != nil {
+			for _, address := range status.Self.TailscaleIPs { online[address] = true }
+		}
+		for _, peer := range status.Peer {
+			for _, address := range peer.TailscaleIPs { online[address] = peer.Online }
+		}
 	}
-	for _, peer := range network.Peers {
-		state, known := peer.Online().GetOk()
-		for _, prefix := range peer.Addresses().All() { online[prefix.Addr()] = known && state }
+	route := tailnetDNS{Nameservers: []tailnetNameserver{}, Members: []tailnetNameserver{}}
+	for _, address := range members {
+		entry := tailnetNameserver{Address: address}
+		if parsed, err := netip.ParseAddr(address); err == nil {
+			if state, known := online[parsed]; known { entry.Online = &state }
+		}
+		route.Members = append(route.Members, entry)
 	}
-	route := tailnetDNS{Nameservers: []tailnetNameserver{}}
-	for suffix, resolvers := range network.DNS.Routes {
+	for suffix, resolvers := range config.Routes {
 		if !strings.EqualFold(strings.TrimSuffix(suffix, "."), "wb.inthedark.boo") { continue }
 		for _, resolver := range resolvers {
 			if resolver == nil { continue }

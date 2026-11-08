@@ -11,7 +11,6 @@ import PrimaryButton from "../ui/PrimaryButton";
 import WorkbenchLinkButton from "./WorkbenchLinkButton";
 import WorkbenchCertificateInstall from "./WorkbenchCertificateInstall";
 import WorkbenchCertificateTrust from "./WorkbenchCertificateTrust";
-import WorkbenchNetworkNameservers from "./WorkbenchNetworkNameservers";
 import { ExternalLinkIcon, RefreshCwIcon } from "./workbench-icons";
 
 export default function WorkbenchPrivateAccessWizard() {
@@ -56,7 +55,7 @@ export default function WorkbenchPrivateAccessWizard() {
     {step === "choose" ? <div className="flex flex-wrap gap-2">{status.networks?.map(candidate => <PrimaryButton key={candidate.id} disabled={busy || !editable}
       onClick={() => act({ action: "select-network", id: candidate.id })}>{candidate.label}'s network</PrimaryButton>)}</div> : null}
     {step === "dns" ? <>
-      <WorkbenchNetworkNameservers />
+      <p className="m-0 text-sm text-fg/muted">Add the nameservers shown under Private DNS below in Tailscale DNS.</p>
       <PrimaryButton disabled={busy} onClick={() => { setDnsConfirmed(true); void run(() => network.client.verify()); }}>I've added the nameservers</PrimaryButton>
     </> : null}
     {step === "trust" && status.rootCertificate ? <>

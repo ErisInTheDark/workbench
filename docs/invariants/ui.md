@@ -3,6 +3,7 @@
   - avoid drop shadows
   - avoid hard corners
   - no generic browser ui
+  - no all-caps text (`uppercase`, small tracked caps headings) unless the user approved that specific use; show hierarchy with weight, size or muted color, in sentence case
   - always use custom scrollbars
 - Support both light and dark color schemes in every visual change
 - Make desktop and mobile behavior deliberate, layouts and sticky controls

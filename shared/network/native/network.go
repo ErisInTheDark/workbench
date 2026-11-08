@@ -399,7 +399,8 @@ func (node *privateNetwork) run() (result error) {
 	if err != nil {
 		return errors.New("private Tailscale local API is unavailable")
 	}
-	watcher, err := node.local.WatchIPNBus(node.ctx, ipn.NotifyInitialState)
+	dnsRefresh := make(chan struct{}, 1)
+	watcher, err := node.local.WatchIPNBus(node.ctx, ipn.NotifyInitialState|ipn.NotifyPeerChanges|ipn.NotifyPeerPatches)
 	if err != nil {
 		return errors.New("private Tailscale login status is unavailable")
 	}
@@ -438,10 +439,14 @@ func (node *privateNetwork) run() (result error) {
 					status.Message = &message
 				})
 			}
-			if notification.NetMap != nil {
-				if route := privateDNSRoute(notification.NetMap); !reflect.DeepEqual(route, node.snapshot().TailnetDNS) {
-					node.change(func(status *privateStatus) { status.TailnetDNS = route })
+			if notification.NetMap != nil || notification.SelfChange != nil || len(notification.PeersChanged) > 0 ||
+				len(notification.PeersRemoved) > 0 || len(notification.PeerChangedPatch) > 0 {
+				select {
+				case dnsRefresh <- struct{}{}:
+				default:
 				}
+			}
+			if notification.NetMap != nil {
 				select {
 				case directoryRefresh <- struct{}{}:
 				default:
@@ -460,6 +465,34 @@ func (node *privateNetwork) run() (result error) {
 	if status.Self == nil || len(status.TailscaleIPs) == 0 {
 		return errors.New("private Tailscale node did not receive an identity and address")
 	}
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		// Tailnet DNS edits need not change this node or its peers, so a slow poll backs up the change signals.
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			config, err := node.local.DNSConfig(node.ctx)
+			if err == nil {
+				peers, _ := node.local.Status(node.ctx)
+				var members []string
+				if node.directorySnapshot != nil {
+					if directory := node.directorySnapshot(); directory != nil {
+						for _, member := range directory.Members { members = append(members, member.Addresses...) }
+					}
+				}
+				if route := privateDNSRoute(config, peers, members);!reflect.DeepEqual(route, node.snapshot().TailnetDNS) {
+					node.change(func(status *privateStatus) { status.TailnetDNS = route })
+				}
+			}
+			select {
+			case <-node.ctx.Done():
+				return
+			case <-dnsRefresh:
+			case <-ticker.C:
+			}
+		}
+	}()
 	nodeID := string(status.Self.ID)
 	_, request, err := persistentLeafRequest(node.directory, node.hostname())
 	if err != nil {

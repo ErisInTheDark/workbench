@@ -6,8 +6,8 @@
 import { useContext, useState } from "react";
 import { workbenchNetworkMode, type WorkbenchNetworkAction } from "workbench-shared/http/workbench-network";
 import { WorkbenchNetworkClientContext, useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
-import { networkDnsCoverage, TAILSCALE_DNS_ADMIN_URL } from "../../workbench/app/network-dns-coverage";
-import WorkbenchLinkButton from "./WorkbenchLinkButton";
+import { networkDnsCoverage } from "../../workbench/app/network-dns-coverage";
+import WorkbenchNetworkPrivateDns from "./WorkbenchNetworkPrivateDns";
 import Disclosure from "../ui/Disclosure";
 import FormSection from "../ui/FormSection";
 import PrimaryButton from "../ui/PrimaryButton";
@@ -63,7 +63,6 @@ function NetworkSettingsContent () {
     ? dnsAttention || !httpsReady && (network.verification.phase === "failed" || status.privateAccess.phase === "failed" || !snapshot.executable.available)
     : mode !== "localhost" && status.hostServe.phase !== "ready";
   const connectionStatus = mode === "localhost" ? "Only this computer"
-    : dnsAttention ? dns!.verdict === "broken" ? "Private names do not resolve" : "Private DNS needs attention"
     : service ? httpsReady ? "HTTPS ready"
       : network.verification.phase === "checking" ? "Checking HTTPS..."
         : attention ? "HTTPS needs attention" : "Setting up HTTPS..."
@@ -106,10 +105,6 @@ function NetworkSettingsContent () {
         Cancel
       </PrimaryButton> : null}
     </div>
-    {dnsAttention ? <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-sm">
-      <p role="alert" className={`m-0 min-w-0 flex-1 ${dns!.verdict === "broken" ? "text-danger" : "text-[color:var(--attention)]"}`}>{dns!.problem}</p>
-      <WorkbenchLinkButton href={TAILSCALE_DNS_ADMIN_URL} target="_blank" rel="noreferrer">Fix in Tailscale DNS<ExternalLinkIcon className="size-4" /></WorkbenchLinkButton>
-    </div> : null}
     {messages.length || failures.length ? <div className="space-y-1 px-1 text-sm">
       {messages.map(message => <p key={message} className="m-0 text-fg/muted">{message}</p>)}
       {failures.map(message => <p key={message} role="alert" className="m-0 text-danger">{message}</p>)}
@@ -117,6 +112,7 @@ function NetworkSettingsContent () {
     {mode !== "localhost" && !privateAccess && status.hostServe.phase === "failed"
       ? <PrimaryButton shape="compact" disabled={busy || !editable} onClick={() => { void act({ action: "retry" }); }}>Reconnect</PrimaryButton> : null}
     {service && privateAccess ? <WorkbenchPrivateAccessWizard /> : null}
+    {service && snapshot.configuration.group ? <WorkbenchNetworkPrivateDns coverage={dns} /> : null}
     {!snapshot.capabilities ? <p role="status" className="m-0 text-sm text-fg/muted">Networking controls are waiting for the updated app runtime. Reload client:database, then refresh this page.</p> : null}
     <div className="@container pt-2"><div className="flex flex-col gap-6 @4xl:flex-row @4xl:gap-0">
       <div className="min-w-0 flex-1 @4xl:pr-6"><WorkbenchNetworkConnectionForm /></div>

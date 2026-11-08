@@ -10,7 +10,6 @@ import PressDragMenu from "../ui/PressDragMenu";
 import IconButton from "../ui/IconButton";
 import RadioRow from "../ui/RadioRow";
 import WorkbenchCheckbox from "./WorkbenchCheckbox";
-import WorkbenchNetworkNameservers from "./WorkbenchNetworkNameservers";
 import PrimaryButton from "../ui/PrimaryButton";
 import { SettingsCardRow } from "../ui/SettingsCard";
 import { ChevronDownIcon, HomeIcon, LockIcon, SaveIcon, ResetIcon, XIcon } from "./workbench-icons";
@@ -104,7 +103,6 @@ export default function WorkbenchNetworkAccessSettings() {
           <Availability state={availability(id)} />
         </span></SettingsCardRow>;
       })}
-    <SettingsCardRow label="Nameservers"><WorkbenchNetworkNameservers /></SettingsCardRow>
     <SettingsCardRow label="Machines">
       <span className="flex min-w-0 flex-wrap items-center gap-x-5 gap-y-1">{members.map(member => <span key={member.nodeId} className="inline-flex items-center gap-1.5">
         <span className="font-medium text-text">{member.label}</span>
