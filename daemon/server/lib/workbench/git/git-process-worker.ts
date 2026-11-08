@@ -12,6 +12,12 @@ if (!port) throw new Error("git-process-worker must run inside a worker thread."
 
 const children = new Map<number, ChildProcessWithoutNullStreams>();
 
+/**
+ * Git's default fsync set leaves refs unflushed, so a crash can zero-fill a ref Workbench state hangs from. `committed`
+ * flushes objects and refs before Git exits; `batch` keeps loose-object flushing to one disk flush per command.
+ */
+const DURABLE_WRITES = ["-c", "core.fsync=committed", "-c", "core.fsyncMethod=batch"];
+
 /** Quiet time after exit before stdio counts as drained; the dead writer's remaining output is already in the pipe. */
 const EXITED_PIPE_QUIET_MS = 1_000;
 
@@ -62,7 +68,7 @@ function environment(delta: GitProcessEnvironmentDelta) {
 function start(request: Extract<GitProcessWorkerRequest, { kind: "run" | "open" }>) {
   let child: ChildProcessWithoutNullStreams;
   try {
-    child = spawn("git", request.args, {
+    child = spawn("git", [...DURABLE_WRITES, ...request.args], {
       cwd: request.cwd, env: environment(request.env), stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
     });
   } catch (error) {

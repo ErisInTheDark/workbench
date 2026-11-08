@@ -4,6 +4,7 @@
 - Every catalogued project, including the Workbench Library, projects arcs into thread state; daemon projects use machine Git arc roots.
 - Workspace Git arc operations never select an unnamed repository that contributes no scope; empty plan members never block other members, and edits naming one activate it.
 - Catalogued linked worktrees registered inside a project root join that project's Git arc as extra roots, qualified only when nested or when the project has several configured roots. Their registries resolve owners bound at the containing checkout; other foreign owners stay orphaned. Claim stats attribute their paths to the worktree's own project. Agent-facing reads include a nested worktree only once the thread holds arc state there or the request names it.
+- Workbench Git state writes are crash-durable before acknowledgement: objects reach disk before refs naming them, and ref transactions fsync. A present but unreadable state ref fails closed; only an absent ref reads as empty.
 - Git arc read endpoints do not fetch remotes or update refs. They derive presentation state from local repository state. Mutations revalidate before changing refs or history.
 - Git history rewrites preserve checkpoint state only within declared scope.
 - One Git arc inspection request owns one worktree snapshot per repository. Compare, diff, and unclaimed-dirt projection reuse it.

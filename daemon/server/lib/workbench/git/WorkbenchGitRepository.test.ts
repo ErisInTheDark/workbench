@@ -689,6 +689,14 @@ test("reads objects and preserves exact changes across literal, binary, and larg
   });
   assert.equal(await repository.readBlobAtRef("refs/worktree/workbench/missing-object"), null);
   assert.equal(await repository.readCommitAt("refs/worktree/workbench/missing-object"), null);
+  // A crash can leave a state ref zero-filled or naming an object that never reached disk; neither may read as empty state.
+  const refFile = async (ref: string) => path.resolve(fixture.root, (await repository.run(["rev-parse", "--git-path", ref])).trim());
+  await fs.writeFile(await refFile("refs/worktree/workbench/torn-ref"), Buffer.alloc(41));
+  await assert.rejects(repository.readBlobAtRef("refs/worktree/workbench/torn-ref"), /unreadable/u);
+  await fs.writeFile(await refFile("refs/worktree/workbench/lost-object"), `${"d".repeat(40)}\n`);
+  await assert.rejects(repository.readBlobAtRef("refs/worktree/workbench/lost-object"), /unreadable/u);
+  await fs.rm(await refFile("refs/worktree/workbench/torn-ref"));
+  await fs.rm(await refFile("refs/worktree/workbench/lost-object"));
   await assert.rejects(repository.readBlobAtRef("HEAD"), /does not resolve to a blob/u);
   await assert.rejects(repository.readCommitAt("refs/worktree/workbench/test-object"), /is not a commit/u);
   await assert.rejects(repository.readCommitRef(blob, "refs/worktree/workbench/test-object"), /is not a commit/u);

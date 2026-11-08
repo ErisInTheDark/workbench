@@ -48,6 +48,10 @@ import type { GitCheckpointFileChange } from "workbench-shared/workbench/git/che
 
 const GIT_MAX_BUFFER = 32 * 1024 * 1024;
 const COMMIT_PATTERN = /^[a-f0-9]{7,64}$/iu;
+/** `git show-ref --exists` exit codes: absent ref, usage error from Git without the flag, and unresolvable refs. */
+const SHOW_REF_ABSENT = 2;
+const SHOW_REF_UNSUPPORTED = 129;
+const SHOW_REF_UNREADABLE = [1, 128];
 export const GIT_STATE_GENERATION_REF = "refs/worktree/workbench/state-generation";
 
 /** Each worktree's real index path never moves, so resolve it once per root. */
@@ -457,9 +461,13 @@ export default class WorkbenchGitRepository {
     throw new Error(batch.errors.get(commit) ?? `Unable to read commit metadata for ${commit}.`);
   }
 
+  /** Null only when Git has no such ref; a torn ref or one naming a missing object rejects instead of reading as empty. */
   async readBlobAtRef(ref: string): Promise<GitResolvedBlob | null> {
     const object = await this.readObject(ref);
-    if (!object) return null;
+    if (!object) {
+      if (await this.refIsAbsent(ref)) return null;
+      throw new Error(`Git ref ${ref} is unreadable (torn ref or missing object); Workbench will not treat its state as empty.`);
+    }
     if (object.type !== "blob") throw new Error(`Git ref ${ref} does not resolve to a blob.`);
     return { blob: object.objectId, contents: object.contents.toString("utf8") };
   }
@@ -537,6 +545,17 @@ export default class WorkbenchGitRepository {
   async listRefs(namespace: string) {
     const output = await this.run(["for-each-ref", "--format=%(refname)", namespace]);
     return output.split(/\r?\n/u).map((value) => value.trim()).filter(Boolean);
+  }
+
+  /**
+   * `cat-file` reports torn and absent refs alike as missing; `show-ref --exists` exits 2 only for absent ones. Git
+   * before 2.43 lacks the flag, so its usage exit falls back to trusting the missing read.
+   */
+  private async refIsAbsent(ref: string) {
+    const { exitCode } = await this.runWithInputResult(["show-ref", "--exists", ref], "", process.env, [
+      SHOW_REF_ABSENT, SHOW_REF_UNSUPPORTED, ...SHOW_REF_UNREADABLE,
+    ]);
+    return exitCode === SHOW_REF_ABSENT || exitCode === SHOW_REF_UNSUPPORTED;
   }
 
   /** The object a ref names, or null when it is absent (a ref naming a missing object reads as absent too). */

@@ -103,10 +103,17 @@ export default class GitObjectWriter {
     const target = path.join(directory, id.slice(2));
     if (await exists(target)) return id;
     await fs.mkdir(directory, { recursive: true });
-    // Same protocol as Git: a private temporary file renamed into place, so readers never see partial objects.
+    // Same protocol as Git: a private temporary file renamed into place, so readers never see partial objects. The flush
+    // before rename keeps a crash from leaving a zero-filled object behind a ref that names it.
     const temporary = path.join(directory, `tmp_obj_${randomUUID()}`);
     try {
-      await fs.writeFile(temporary, await deflate(framed), { mode: 0o444 });
+      const file = await fs.open(temporary, "wx", 0o444);
+      try {
+        await file.writeFile(await deflate(framed));
+        await file.sync();
+      } finally {
+        await file.close();
+      }
       try {
         await fs.rename(temporary, target);
       } catch (error) {
