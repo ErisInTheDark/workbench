@@ -2,7 +2,8 @@
  * Exports:
  * - ServiceControlSocket/WorkbenchServiceClientOptions: private transport and observation boundaries.
  * - WorkbenchServiceIntent: named control request before correlation assignment.
- * - WorkbenchServiceClient (default): owns one private control session and its pending requests.
+ * - WorkbenchServiceClient (default): owns one private control session and its pending requests, reconnecting with
+ *   backoff after the session is lost.
  */
 import { randomUUID } from "node:crypto";
 import { watch } from "node:fs";
@@ -27,7 +28,18 @@ export interface WorkbenchServiceClientOptions {
   verify?: (endpoint: WorkbenchServiceEndpoint, signal: AbortSignal) => Promise<void>;
   createSocket?: (endpoint: WorkbenchServiceEndpoint) => ServiceControlSocket;
   observe?: (changed: () => void, failed: (error: Error) => void) => () => void;
+  /** Runs `retry` after `delayMs` and returns its cancel; defaults to a timer. */
+  schedule?: (retry: () => void, delayMs: number) => () => void;
 }
+
+/** A lost or failed connection retries on its own, backing off to this ceiling, until it connects or closes. */
+const RETRY_BASE_MS = 500;
+const RETRY_MAX_MS = 10_000;
+const timerSchedule = (retry: () => void, delayMs: number) => {
+  const timer = setTimeout(retry, delayMs);
+  timer.unref?.();
+  return () => clearTimeout(timer);
+};
 export type WorkbenchServiceIntent = {
   [Method in WorkbenchServiceRequest["method"]]: Omit<Extract<WorkbenchServiceRequest, { method: Method }>, "id">;
 }[WorkbenchServiceRequest["method"]];
@@ -48,6 +60,8 @@ export default class WorkbenchServiceClient {
   private readonly listeners = new Set<() => void>();
   private current: WorkbenchServiceSnapshot | null = null;
   private failure: string | null = null;
+  private retryAttempts = 0;
+  private cancelRetry: (() => void) | null = null;
 
   constructor(private readonly options: WorkbenchServiceClientOptions) {}
 
@@ -144,6 +158,9 @@ export default class WorkbenchServiceClient {
           this.current = response.snapshot;
           this.failure = null;
           this.phase = "ready";
+          this.retryAttempts = 0;
+          this.cancelRetry?.();
+          this.cancelRetry = null;
           this.publish();
           resolve();
           return;
@@ -201,6 +218,8 @@ export default class WorkbenchServiceClient {
   async close() {
     if (this.phase === "closed") return;
     this.phase = "closed";
+    this.cancelRetry?.();
+    this.cancelRetry = null;
     this.observation?.();
     this.observation = null;
     this.invalidated = false;
@@ -232,6 +251,13 @@ export default class WorkbenchServiceClient {
     this.failure = (error instanceof Error ? error.message : String(error)).replace(/[\r\n]/gu, " ").slice(0, 512);
     this.options.warn(this.failure);
     this.publish();
+    // One pending retry at a time; a restarted service may publish its endpoint before the old socket reports closing.
+    this.cancelRetry?.();
+    const delay = Math.min(RETRY_BASE_MS * 2 ** this.retryAttempts++, RETRY_MAX_MS);
+    this.cancelRetry = (this.options.schedule ?? timerSchedule)(() => {
+      this.cancelRetry = null;
+      if (this.phase === "failed") void this.reconnect().catch(() => {});
+    }, delay);
   }
 
   private publish() { for (const listener of this.listeners) listener(); }

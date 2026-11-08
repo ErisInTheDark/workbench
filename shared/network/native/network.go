@@ -377,6 +377,15 @@ func offlinePrivateStatus(directory string, settings *privateConfiguration) (pri
 	return status, nil
 }
 
+// notificationRefreshes says which views a Tailscale bus notification may have changed. Off Windows the netmap only
+// arrives in the first notification, so later changes come as self and peer deltas. Narrow peer patches (endpoints,
+// last-seen, online) can move DNS reachability but never the member directory, and arrive far too often to re-sync on.
+func notificationRefreshes(notification ipn.Notify) (dns bool, directory bool) {
+	membership := notification.NetMap != nil || notification.SelfChange != nil ||
+		len(notification.PeersChanged) > 0 || len(notification.PeersRemoved) > 0
+	return membership || len(notification.PeerChangedPatch) > 0, membership
+}
+
 func (node *privateNetwork) run() (result error) {
 	var workers sync.WaitGroup
 	var cleanup []func() error
@@ -439,14 +448,14 @@ func (node *privateNetwork) run() (result error) {
 					status.Message = &message
 				})
 			}
-			if notification.NetMap != nil || notification.SelfChange != nil || len(notification.PeersChanged) > 0 ||
-				len(notification.PeersRemoved) > 0 || len(notification.PeerChangedPatch) > 0 {
+			dns, directory := notificationRefreshes(notification)
+			if dns {
 				select {
 				case dnsRefresh <- struct{}{}:
 				default:
 				}
 			}
-			if notification.NetMap != nil {
+			if directory {
 				select {
 				case directoryRefresh <- struct{}{}:
 				default:
@@ -698,6 +707,9 @@ func (node *privateNetwork) run() (result error) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
+			// A failed sync (owner offline, say) retries on this tick; a healthy one waits for peer changes.
+			retry := time.NewTicker(time.Minute)
+			defer retry.Stop()
 			for {
 				var err error
 				if node.settings.Load().Role == "authority" { err = node.group.initialise(node.ctx) }
@@ -706,10 +718,13 @@ func (node *privateNetwork) run() (result error) {
 					message := err.Error()
 					node.change(func(status *privateStatus) { status.Message = &message })
 				}
+			wait:
 				select {
 				case <-node.ctx.Done():
 					return
 				case <-directoryRefresh:
+				case <-retry.C:
+					if err == nil { goto wait }
 				}
 			}
 		}()

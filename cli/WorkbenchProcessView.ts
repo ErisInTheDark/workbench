@@ -393,7 +393,8 @@ export default class WorkbenchProcessView {
           this.forceArmed = false;
           await controls.forceStopHost();
         } else {
-          if (!snapshot.host || !snapshot.app) { this.notice("Kill host is unavailable: the app must be running to restart it."); return; }
+          if (!snapshot.host) { this.notice("Kill host is unavailable: not connected to the host yet; it reconnects on its own."); return; }
+          if (!snapshot.app) { this.notice("Kill host is unavailable: the app must be running to restart it."); return; }
           await controls.killHost();
         }
       } else if (kind === "app") {

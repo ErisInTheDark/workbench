@@ -1,4 +1,5 @@
-// No exports. Protect stable private URLs while local listener targets change.
+// No exports. Protect stable private URLs while local listener targets change, and which bus changes re-read the
+// tailnet's DNS and member directory.
 package main
 
 import (
@@ -12,9 +13,25 @@ import (
 	"strings"
 	"testing"
 
+	"tailscale.com/ipn"
 	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tailcfg"
 )
+
+func TestBusChangesRefreshDNSAndDirectoryWithoutTheNetmap(t *testing.T) {
+	for _, test := range []struct { name string; notification ipn.Notify; dns, directory bool }{
+		{"peer joined", ipn.Notify{PeersChanged: []*tailcfg.Node{{}}}, true, true},
+		{"peer removed", ipn.Notify{PeersRemoved: []tailcfg.NodeID{1}}, true, true},
+		{"self changed", ipn.Notify{SelfChange: &tailcfg.Node{}}, true, true},
+		{"peer came online", ipn.Notify{PeerChangedPatch: []*tailcfg.PeerChange{{}}}, true, false},
+		{"unrelated", ipn.Notify{}, false, false},
+	} {
+		dns, directory := notificationRefreshes(test.notification)
+		if dns != test.dns || directory != test.directory {
+			t.Errorf("%s: dns=%v directory=%v, want %v %v", test.name, dns, directory, test.dns, test.directory)
+		}
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

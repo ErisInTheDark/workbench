@@ -54,6 +54,39 @@ test("cancelling one request does not cancel another or replay either", async co
   assert.equal(socket.sent.filter(item => item.method === "service/request/cancel").length, 1);
 });
 
+test("a lost host connection reconnects by itself with backoff, and closing stops retrying", async context => {
+  const sockets: Socket[] = [];
+  const retries: Array<{ run: () => void; delayMs: number; cancelled: boolean }> = [];
+  let unreachable = false;
+  const client = new WorkbenchServiceClient({
+    endpointPath: "unused",
+    read: async () => unreachable ? null : ({ version: 1, instanceId: randomUUID(), pid: 1, origin: "http://127.0.0.1:1234", token: "a".repeat(64) }),
+    verify: async () => {},
+    createSocket: () => { const socket = new Socket(); sockets.push(socket); queueMicrotask(() => socket.message({ kind: "snapshot", snapshot })); return socket; },
+    observe: () => () => {},
+    warn: () => {},
+    schedule: (run, delayMs) => { const retry = { run, delayMs, cancelled: false }; retries.push(retry); return () => { retry.cancelled = true; }; },
+  });
+  context.after(() => client.close());
+  await client.start();
+  sockets[0]!.close();
+  assert.equal(client.getSnapshot().phase, "failed");
+  assert.equal(retries.length, 1, "losing the connection schedules one retry without any endpoint change");
+  retries[0]!.run();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(client.getSnapshot().phase, "ready");
+  assert.equal(sockets.length, 2);
+  sockets[1]!.close();
+  assert.equal(retries[1]!.delayMs, retries[0]!.delayMs, "a successful reconnect resets the backoff");
+  unreachable = true;
+  retries[1]!.run();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(client.getSnapshot().phase, "failed");
+  assert.equal(retries[2]!.delayMs, retries[1]!.delayMs * 2, "a retry that fails again backs off");
+  await client.close();
+  assert.ok(retries[2]!.cancelled, "closing cancels the pending retry");
+});
+
 test("connection loss rejects pending mutations rather than replaying them", async context => {
   const { client, socket } = await fixture();
   context.after(() => client.close());
