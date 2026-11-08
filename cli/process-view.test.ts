@@ -38,7 +38,7 @@ test("the natively started view loads working process controls", async () => {
   const probe = `
     const client = () => ({
       start: async () => {}, close: async () => {}, subscribe: () => () => {},
-      getSnapshot: () => ({ phase: "ready", snapshot: { identity: { state: "ready" } }, ready: false, instanceId: null, runtime: null }),
+      getSnapshot: () => ({ phase: "ready", snapshot: { identity: { state: "ready", wakeEnabled: true } }, ready: false, instanceId: null, runtime: null }),
     });
     const { default: loadProcessViewControls } = await import(${JSON.stringify(loader)});
     const controls = await loadProcessViewControls({
@@ -50,5 +50,5 @@ test("the natively started view loads working process controls", async () => {
   const { stdout } = await promisify(execFile)(process.execPath, [
     "--disable-warning=ExperimentalWarning", "--input-type=module", "--eval", probe,
   ], { env: { ...process.env, NODE_OPTIONS: "" } });
-  assert.deepEqual(JSON.parse(stdout), { host: true, daemon: true, app: false, runtime: null });
+  assert.deepEqual(JSON.parse(stdout), { host: true, daemon: true, wake: true, app: false, runtime: null });
 });

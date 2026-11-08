@@ -5,6 +5,7 @@ import path from "node:path";
 import recordHostEnvironment from "./host-environment-file.ts";
 import WorkbenchServiceStartup from "./WorkbenchServiceStartup.ts";
 import WorkbenchServiceLauncher from "./WorkbenchServiceLauncher.ts";
+import setWorkbenchConnect from "./set-workbench-connect.ts";
 import WorkbenchServiceClient from "../../shared/process/WorkbenchServiceClient.ts";
 import resolveWorkbenchDataRoot from "../../shared/workbench-data-root.ts";
 
@@ -29,12 +30,15 @@ async function main() {
   process.once("SIGINT", cancel);
   process.once("SIGTERM", cancel);
   try {
-    if (command === "connect") await startup.setEnabled(true);
-    if (command === "disconnect") await startup.setEnabled(false);
     await launcher.ensure(abort.signal);
     await client.start();
     if (command === "connect" || command === "disconnect") {
-      await client.request({ method: "service/wake/enable", enabled: command === "connect" }, abort.signal);
+      await setWorkbenchConnect({
+        enabled: command === "connect",
+        setStartupEnabled: enabled => startup.setEnabled(enabled),
+        request: (intent, signal) => client.request(intent, signal),
+        signal: abort.signal,
+      });
       process.stdout.write(command === "connect" ? "Workbench wake service enabled.\n" : "Workbench wake service disabled; active work is unchanged.\n");
     } else if (command === "wake") {
       await client.request({ method: "service/daemon/wake", retry: true }, abort.signal);

@@ -17,7 +17,7 @@ const appRuntime: WorkbenchAppControlRuntime = { dirty: true, destructive: false
 function fixture() {
   const requests: ProcessViewHostIntent[] = [];
   const calls: string[] = [];
-  const hostState: { phase: Phase; daemon: DaemonState } = { phase: "ready", daemon: "ready" };
+  const hostState: { phase: Phase; daemon: DaemonState; wake: boolean } = { phase: "ready", daemon: "ready", wake: false };
   const appState: { ready: boolean; instanceId: string | null; runtime: WorkbenchAppControlRuntime | null } = {
     ready: true, instanceId: "app-1", runtime: appRuntime,
   };
@@ -27,10 +27,11 @@ function fixture() {
     subscribe: () => () => {},
     getSnapshot: () => ({
       phase: hostState.phase,
-      snapshot: hostState.phase === "ready" ? { identity: { state: hostState.daemon } } : null,
+      snapshot: hostState.phase === "ready" ? { identity: { state: hostState.daemon, wakeEnabled: hostState.wake } } : null,
     }),
     request: async intent => {
       requests.push(intent);
+      calls.push(`request ${intent.method}`);
       if (intent.method === "service/process/read") {
         return { kind: "process", id: "1", instanceId: "host-1", logDirectory: "/logs", logPrefix: "workbench-host" };
       }
@@ -55,6 +56,7 @@ function fixture() {
     createAppClient: () => app,
     startApp: async () => { calls.push("start-app"); },
     openUrl: async url => { calls.push(`open ${url}`); },
+    setStartupEnabled: async enabled => { calls.push(`startup ${enabled}`); },
   });
   return { controls, requests, calls, hostState, appState };
 }
@@ -62,13 +64,31 @@ function fixture() {
 test("availability composes host, daemon and app truth", async () => {
   const f = fixture();
   const controls = await f.controls;
-  assert.deepEqual(controls.snapshot(), { host: true, daemon: true, app: true, runtime: appRuntime });
+  assert.deepEqual(controls.snapshot(), { host: true, daemon: true, wake: false, app: true, runtime: appRuntime });
   f.hostState.daemon = "sleeping";
-  assert.deepEqual(controls.snapshot(), { host: true, daemon: false, app: true, runtime: appRuntime });
+  f.hostState.wake = true;
+  assert.deepEqual(controls.snapshot(), { host: true, daemon: false, wake: true, app: true, runtime: appRuntime });
   f.hostState.phase = "failed";
   f.appState.ready = false;
-  // A gone app's last summary is never shown as live.
-  assert.deepEqual(controls.snapshot(), { host: false, daemon: false, app: false, runtime: null });
+  // A gone app's last summary is never shown as live, nor a gone host's connect state.
+  assert.deepEqual(controls.snapshot(), { host: false, daemon: false, wake: null, app: false, runtime: null });
+});
+
+test("connect sets startup before the host's wake publication and needs the host", async () => {
+  const f = fixture();
+  const controls = await f.controls;
+  await controls.setConnect(true);
+  await controls.setConnect(false);
+  assert.deepEqual(f.calls, [
+    "startup true", "request service/wake/enable", "startup false", "request service/wake/enable",
+  ]);
+  assert.deepEqual(f.requests, [
+    { method: "service/wake/enable", enabled: true },
+    { method: "service/wake/enable", enabled: false },
+  ]);
+  f.hostState.phase = "failed";
+  await assert.rejects(controls.setConnect(true), /host is not running/u);
+  assert.equal(f.calls.filter(call => call.startsWith("startup")).length, 2);
 });
 
 test("reload-all and pull-only require the app and pull without reloading", async () => {

@@ -1,7 +1,7 @@
 /*
  * Exports:
  * - default WorkbenchProcessView: own the detachable terminal log view, pinned log-coloured keybind legend, lifecycle controls,
- *   open-in-browser, hold-to-confirm reload-all and pull keys, and dependency repair cancel/retry.
+ *   open-in-browser, connect toggle, hold-to-confirm reload-all and pull keys, and dependency repair cancel/retry.
  *   Built-ins only and erasable TypeScript: `wb view` loads it natively while dependencies are being repaired.
  */
 import type { Readable } from "node:stream";
@@ -58,7 +58,7 @@ const DANGER_HOLD_MS = 2_000;
 /** Redraw cadence while a hold fills; also how often autorepeat release is checked. */
 const HOLD_FRAME_MS = 33;
 
-const UNAVAILABLE: ProcessViewControlsSnapshot = { host: false, daemon: false, app: false, runtime: null };
+const UNAVAILABLE: ProcessViewControlsSnapshot = { host: false, daemon: false, wake: null, app: false, runtime: null };
 const NO_REPAIR: RepairViewSnapshot = { state: "idle", pid: null, lastError: null, logPath: null };
 
 const OPERATION_LABELS: Partial<Record<WorkbenchAppControlRuntime["operation"]["phase"], string>> = {
@@ -159,6 +159,7 @@ function renderLegend(
     entry("a", "kill app", snapshot.app, logDomainColors.app),
     entry("s", "start app", !snapshot.app, logDomainColors.app),
     entry("o", "open app", snapshot.app, logDomainColors.app),
+    entry("c", snapshot.wake === null ? "connect" : `connect: ${snapshot.wake ? "on" : "off"}`, snapshot.wake !== null, logDomainColors.host),
   ].join("  ");
 }
 
@@ -318,6 +319,7 @@ export default class WorkbenchProcessView {
       case "a": this.enqueue(() => this.act("app")); break;
       case "s": this.enqueue(() => this.act("start")); break;
       case "o": this.enqueue(() => this.act("open")); break;
+      case "c": this.enqueue(() => this.act("connect")); break;
       default: break;
     }
   }
@@ -367,7 +369,7 @@ export default class WorkbenchProcessView {
     });
   }
 
-  private async act(kind: "daemon" | "host" | "app" | "start" | "open" | HoldAction) {
+  private async act(kind: "daemon" | "host" | "app" | "start" | "open" | "connect" | HoldAction) {
     if (kind === "cancel-repair" || kind === "retry-repair") {
       const repair = this.options.repair;
       if (!repair) { this.notice("Dependency repair controls are unavailable."); return; }
@@ -403,6 +405,10 @@ export default class WorkbenchProcessView {
       } else if (kind === "open") {
         if (!snapshot.app) { this.notice("Open app is unavailable: the app is not running."); return; }
         await controls.openApp();
+      } else if (kind === "connect") {
+        if (snapshot.wake === null) { this.notice("Connect is unavailable: not connected to the host yet."); return; }
+        await controls.setConnect(!snapshot.wake, this.lifetime.signal);
+        this.notice(snapshot.wake ? "Wake service disabled; active work is unchanged." : "Wake service enabled.");
       } else if (kind === "reload") {
         await controls.reloadAll();
       } else if (kind === "pull") {

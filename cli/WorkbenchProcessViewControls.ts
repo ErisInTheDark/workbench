@@ -1,12 +1,15 @@
 /*
  * Exports:
- * - ProcessViewControlsSnapshot/ProcessViewControls: live host, daemon and app availability, the app's reload/update summary, plus lifecycle, reload-all and pull intent.
+ * - ProcessViewControlsSnapshot/ProcessViewControls: live host, daemon and app availability, connect state, the app's reload/update summary, plus lifecycle, connect, reload-all and pull intent.
+ * - ProcessViewHostIntent: host requests the view may send.
  * - ProcessViewHostClient/ProcessViewAppClient: minimal seams each owner must satisfy.
  * - WorkbenchProcessViewControlsOptions: data, launch and test seams.
- * - default createWorkbenchProcessViewControls: compose host service, app control, desktop start and browser-open owners.
+ * - default createWorkbenchProcessViewControls: compose host service, app control, connect, desktop start and browser-open owners.
  */
 import path from "node:path";
 import WorkbenchDesktopLauncher from "../app/server/WorkbenchDesktopLauncher.ts";
+import WorkbenchServiceStartup from "../daemon/host/WorkbenchServiceStartup.ts";
+import setWorkbenchConnect from "../daemon/host/set-workbench-connect.ts";
 import type { WorkbenchServiceResponse } from "../shared/http/workbench-service.ts";
 import WorkbenchServiceClient from "../shared/process/WorkbenchServiceClient.ts";
 import { openUrl } from "../shared/process/spawn-detached.ts";
@@ -17,6 +20,8 @@ export interface ProcessViewControlsSnapshot {
   host: boolean;
   daemon: boolean;
   app: boolean;
+  /** Whether `wb connect` is enabled; null until the host is ready. */
+  wake: boolean | null;
   /** The ready app's reload/update summary; null while the app is down or before its first event. */
   runtime: WorkbenchAppControlRuntime | null;
 }
@@ -25,7 +30,8 @@ export type ProcessViewHostIntent =
   | { method: "service/process/read" }
   | { method: "service/daemon/restart"; instanceId: string }
   | { method: "service/stop"; instanceId: string }
-  | { method: "service/emergency/stop"; instanceId: string };
+  | { method: "service/emergency/stop"; instanceId: string }
+  | { method: "service/wake/enable"; enabled: boolean };
 
 type ProcessViewHostResponse = Exclude<WorkbenchServiceResponse, { kind: "snapshot" }>;
 
@@ -35,7 +41,7 @@ export interface ProcessViewHostClient {
   subscribe(listener: () => void): () => void;
   getSnapshot(): {
     phase: "idle" | "connecting" | "ready" | "failed" | "closed";
-    snapshot: { identity: { state: "sleeping" | "starting" | "ready" | "failed" } } | null;
+    snapshot: { identity: { state: "sleeping" | "starting" | "ready" | "failed"; wakeEnabled: boolean } } | null;
   };
   request(intent: ProcessViewHostIntent, signal?: AbortSignal): Promise<ProcessViewHostResponse>;
 }
@@ -60,6 +66,8 @@ export interface ProcessViewControls {
   killApp(): Promise<void>;
   startApp(): Promise<void>;
   openApp(): Promise<void>;
+  /** Same effect as `wb connect`/`wb disconnect`; needs a running host. */
+  setConnect(enabled: boolean, signal?: AbortSignal): Promise<void>;
   /** Admit the app's reload-all sequence. */
   reloadAll(): Promise<void>;
   /** Admit a pull of the running checkout without reloading. */
@@ -75,6 +83,7 @@ export interface WorkbenchProcessViewControlsOptions {
   createAppClient?: (options: { endpointPath: string; warn(message: string): void }) => ProcessViewAppClient;
   startApp?: () => Promise<void>;
   openUrl?: (url: string) => Promise<void>;
+  setStartupEnabled?: (enabled: boolean) => Promise<void>;
 }
 
 export default async function createWorkbenchProcessViewControls(
@@ -98,9 +107,11 @@ export default async function createWorkbenchProcessViewControls(
 
   const snapshot = (): ProcessViewControlsSnapshot => {
     const current = host.getSnapshot();
+    const identity = current.phase === "ready" ? current.snapshot?.identity : undefined;
     return {
       host: current.phase === "ready",
-      daemon: current.phase === "ready" && current.snapshot?.identity.state === "ready",
+      daemon: identity?.state === "ready",
+      wake: identity?.wakeEnabled ?? null,
       app: app.getSnapshot().ready,
       runtime: app.getSnapshot().ready ? app.getSnapshot().runtime : null,
     };
@@ -148,6 +159,16 @@ export default async function createWorkbenchProcessViewControls(
     async openApp() {
       requireApp();
       await (options.openUrl ?? openUrl)(await app.launchUrl());
+    },
+    async setConnect(enabled, signal) {
+      if (host.getSnapshot().phase !== "ready") throw new Error("The Workbench host is not running, so that control is unavailable.");
+      await setWorkbenchConnect({
+        enabled,
+        setStartupEnabled: options.setStartupEnabled
+          ?? (value => new WorkbenchServiceStartup({ root: options.repositoryRoot }).setEnabled(value)),
+        request: (intent, requestSignal) => host.request(intent, requestSignal),
+        signal,
+      });
     },
     async reloadAll() {
       requireApp();

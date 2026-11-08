@@ -66,7 +66,7 @@ function fixture(options: {
   const calls: string[] = [];
   const notices: string[] = [];
   const legends: string[] = [];
-  const snapshot = options.snapshot ?? { host: true, daemon: true, app: true, runtime: null };
+  const snapshot: ProcessViewControlsSnapshot = options.snapshot ?? { host: true, daemon: true, wake: false, app: true, runtime: null };
   const clock = { now: 0 };
   const frames = new Set<() => void>();
   const terminal: string[] = [];
@@ -79,6 +79,7 @@ function fixture(options: {
     killApp: async () => { calls.push("app"); },
     startApp: async () => { calls.push("start"); },
     openApp: async () => { calls.push("open"); },
+    setConnect: async enabled => { calls.push(`connect ${enabled}`); },
     reloadAll: async () => { calls.push("reload"); },
     pullChanges: async () => { calls.push("pull"); },
     close: async () => { calls.push("close-controls"); },
@@ -137,7 +138,7 @@ for (const cause of ["q", "ctrl-c", "eof", "external"] as const) {
 }
 
 test("logs and controls start even when no process is running", async () => {
-  const f = fixture({ snapshot: { host: false, daemon: false, app: false, runtime: null } });
+  const f = fixture({ snapshot: { host: false, daemon: false, wake: null, app: false, runtime: null } });
   const running = f.view.run();
   await f.attached.promise;
   assert.ok(f.calls.includes("follow"));
@@ -172,13 +173,31 @@ test("d, h, o, a and s route to the matching control without detaching", async (
 });
 
 test("unavailable lifecycle keys warn instead of acting", async () => {
-  const f = fixture({ snapshot: { host: false, daemon: false, app: false, runtime: null } });
+  const f = fixture({ snapshot: { host: false, daemon: false, wake: null, app: false, runtime: null } });
   const running = f.view.run();
   await f.attached.promise;
   for (const key of ["d", "h", "a", "o"]) f.input.write(key);
   await flush();
   assert.ok(!f.calls.some(call => LIFECYCLE_CALLS.includes(call)));
   assert.match(f.notices.join("\n"), /unavailable/u);
+  f.view.detach();
+  await running;
+});
+
+test("c flips connect from the live host state and warns while the host is unknown", async () => {
+  const f = fixture();
+  const running = f.view.run();
+  await f.attached.promise;
+  f.input.write("c");
+  await flush();
+  f.snapshot.wake = true;
+  f.input.write("c");
+  await flush();
+  f.snapshot.wake = null;
+  f.input.write("c");
+  await flush();
+  assert.deepEqual(f.calls.filter(call => call.startsWith("connect")), ["connect true", "connect false"]);
+  assert.match(f.notices.join("\n"), /Connect is unavailable/u);
   f.view.detach();
   await running;
 });
@@ -219,7 +238,7 @@ function autorepeat(f: ReturnType<typeof fixture>, key: string, until: number, f
 }
 
 test("autorepeat: holding r through the duration then releasing reloads all", async () => {
-  const f = fixture({ snapshot: { host: true, daemon: true, app: true, runtime: runtime() } });
+  const f = fixture({ snapshot: { host: true, daemon: true, wake: false, app: true, runtime: runtime() } });
   const running = f.view.run();
   await f.attached.promise;
   const last = autorepeat(f, "r", 1_200);
@@ -233,7 +252,7 @@ test("autorepeat: holding r through the duration then releasing reloads all", as
 });
 
 test("autorepeat: releasing early or tapping cancels without acting", async () => {
-  const f = fixture({ snapshot: { host: true, daemon: true, app: true, runtime: runtime() } });
+  const f = fixture({ snapshot: { host: true, daemon: true, wake: false, app: true, runtime: runtime() } });
   const running = f.view.run();
   await f.attached.promise;
   const last = autorepeat(f, "r", 700);
@@ -247,7 +266,7 @@ test("autorepeat: releasing early or tapping cancels without acting", async () =
 });
 
 test("Escape cancels a full hold, and destructive reloads need the longer hold", async () => {
-  const f = fixture({ snapshot: { host: true, daemon: true, app: true, runtime: runtime({ destructive: true }) } });
+  const f = fixture({ snapshot: { host: true, daemon: true, wake: false, app: true, runtime: runtime({ destructive: true }) } });
   const running = f.view.run();
   await f.attached.promise;
   autorepeat(f, "r", 2_300);
@@ -265,7 +284,7 @@ test("Escape cancels a full hold, and destructive reloads need the longer hold",
 test("kitty terminals hold until the real release and restore the keyboard on detach", async () => {
   const update: InstallationUpdate = { state: "available", reason: null, upstream: "origin/main", behind: 2, ahead: 0, conflicts: [],
     lockfileChanged: false, checkedAt: 0, projectId: null, failure: null };
-  const f = fixture({ snapshot: { host: true, daemon: true, app: true, runtime: runtime({ dirty: false, update }) } });
+  const f = fixture({ snapshot: { host: true, daemon: true, wake: false, app: true, runtime: runtime({ dirty: false, update }) } });
   const running = f.view.run();
   await f.attached.promise;
   assert.ok(f.terminal.includes(KITTY_KEYBOARD_QUERY));
@@ -287,7 +306,7 @@ test("while controls wait on a running repair, holding x cancels it and r cannot
   const repair = repairFake(RUNNING_REPAIR);
   const f = fixture({
     repair: repair.controls,
-    snapshot: { host: true, daemon: true, app: true, runtime: runtime() },
+    snapshot: { host: true, daemon: true, wake: false, app: true, runtime: runtime() },
     openControls: (_warn, signal) => new Promise((_resolve, reject) => {
       signal.addEventListener("abort", () => reject(signal.reason), { once: true });
     }),
@@ -308,7 +327,7 @@ test("while controls wait on a running repair, holding x cancels it and r cannot
 
 test("while a repair is pending, holding r retries it instead of reloading", async () => {
   const repair = repairFake({ state: "pending", pid: null, lastError: "Cancelled.", logPath: null });
-  const f = fixture({ repair: repair.controls, snapshot: { host: true, daemon: true, app: true, runtime: runtime() } });
+  const f = fixture({ repair: repair.controls, snapshot: { host: true, daemon: true, wake: false, app: true, runtime: runtime() } });
   const running = f.view.run();
   await f.attached.promise;
   f.advance(autorepeat(f, "r", 1_200) + 200);
@@ -324,7 +343,7 @@ test("while a repair is pending, holding r retries it instead of reloading", asy
 test("an unavailable hold key warns once for its whole autorepeat", async () => {
   const conflict: InstallationUpdate = { state: "conflict", reason: null, upstream: "origin/main", behind: 1, ahead: 0, conflicts: ["a.ts"],
     lockfileChanged: false, checkedAt: 0, projectId: null, failure: null };
-  const f = fixture({ snapshot: { host: true, daemon: true, app: true, runtime: runtime({ dirty: false, update: conflict }) } });
+  const f = fixture({ snapshot: { host: true, daemon: true, wake: false, app: true, runtime: runtime({ dirty: false, update: conflict }) } });
   const running = f.view.run();
   await f.attached.promise;
   autorepeat(f, "u", 1_500);
