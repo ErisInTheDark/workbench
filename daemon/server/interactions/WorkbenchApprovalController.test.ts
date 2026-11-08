@@ -257,8 +257,8 @@ test("closing, failed delivery and disposal retract the question; re-opening a h
   assert.deepEqual(disposed.controller.list(), []);
 });
 
-async function shownHostedRequest(h: ReturnType<typeof harness>, signal = new AbortController().signal) {
-  const decision = h.controller.request({ harness: "claude", threadId, turnId, itemId: "item-hosted", subject: command() }, signal);
+async function shownHostedRequest(h: ReturnType<typeof harness>, signal = new AbortController().signal, invocation?: AbortSignal) {
+  const decision = h.controller.request({ harness: "claude", threadId, turnId, itemId: "item-hosted", subject: command() }, signal, invocation);
   for (let attempt = 0; attempt < 20 && !h.controller.list().length; attempt++) await Promise.resolve();
   const shown = h.controller.list()[0];
   assert.ok(shown, "the hosted approval was not shown");
@@ -305,4 +305,51 @@ test("a core reload hands pending approvals to the committed successor without r
   assert.deepEqual(await hosted.decision, { kind: "decline" });
   await successor.choose("native", ["Allow once"]);
   assert.deepEqual(successor.delivered, [{ kind: "allowOnce" }]);
+});
+
+/** A reload aborts the attempt, then the registry replays the same invocation on the successor. */
+async function reloadAndReplay(review: () => Promise<ApprovalReviewVerdict>) {
+  const invocation = new AbortController();
+  const attempt = new AbortController();
+  const previous = harness({ mode: "auto", review });
+  const first = await shownHostedRequest(previous, attempt.signal, invocation.signal);
+  const successor = harness({ mode: "auto", review, handoff: previous.controller.captureReloadState() });
+  successor.controller.activate();
+  previous.controller.dispose();
+  attempt.abort(new Error("runtime reload"));
+  await assert.rejects(first.decision, /runtime reload/u);
+  const replay = () => successor.controller.request(
+    { harness: "claude", threadId, turnId, itemId: "item-hosted", subject: command() }, new AbortController().signal, invocation.signal);
+  return { previous, successor, invocation, requestKey: first.requestKey, replay };
+}
+
+test("a replayed hosted request re-attaches to the shown approval without reviewing it again", async () => {
+  let reviews = 0;
+  const { previous, successor, requestKey, replay } = await reloadAndReplay(async () => (
+    ++reviews === 1 ? { decision: "manual", assessment: "deny, high risk", rationale: "Machine files." }
+      : { decision: "allow", assessment: "allow, low risk", rationale: "Claims write nothing." }
+  ));
+  assert.deepEqual(successor.controller.list().map(pending => pending.requestKey), [requestKey], "the reload retracted nothing");
+  assert.equal([...previous.events, ...successor.events].includes("questionnaire/resolved"), false);
+  const decision = replay();
+  await Promise.resolve();
+  assert.equal(reviews, 1);
+  assert.deepEqual(successor.controller.list().map(pending => pending.requestKey), [requestKey]);
+  await successor.choose(requestKey, ["Decline"]);
+  assert.deepEqual(await decision, { kind: "decline" });
+  assert.deepEqual(successor.controller.list(), []);
+});
+
+test("an answer given between the reload and its replay reaches the replay", async () => {
+  const { successor, requestKey, replay } = await reloadAndReplay(async () => ({ decision: "manual", assessment: "deny, high risk", rationale: null }));
+  await successor.choose(requestKey, ["Allow once"]);
+  assert.deepEqual(await replay(), { kind: "allowOnce" });
+});
+
+test("ending the invocation without a replay retracts its approval", async () => {
+  const { successor, invocation } = await reloadAndReplay(async () => ({ decision: "manual", assessment: "deny, high risk", rationale: null }));
+  invocation.abort(new Error("tool call cancelled"));
+  await Promise.resolve();
+  assert.deepEqual(successor.controller.list(), []);
+  assert.deepEqual(successor.events.slice(-2), ["questionnaire/resolved", "inputResolved"]);
 });

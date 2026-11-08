@@ -80,12 +80,12 @@ export default class WorkbenchCoreSubagentsFeature {
         list: () => ports.approvals().list(),
         pendingFor: threadId => ports.approvals().pendingFor(threadId),
         decide: input => ports.approvals().decide(input),
-        ask: async (parent, subject, signal) => {
+        ask: async (parent, subject, signal, invocation) => {
           const turn = await lookup.provider(parent.harness).threads.latestTurn(parent.threadId);
           return await ports.approvals().request({
             harness: parent.harness, threadId: parent.threadId, itemId: null, subject,
             turnId: turn?.status === "inProgress" ? WorkbenchTurnIdSchema.parse(turn.id) : null,
-          }, signal);
+          }, signal, invocation);
         },
       },
       promoteThread: async (threadId, formerParent) => {

@@ -337,7 +337,7 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         );
       },
       executeBrowseRequest: context.executeBrowseRequest,
-      executeGitArcRequest: async (body, signal) => await gitArc.executeRequest(body, signal),
+      executeGitArcRequest: async (body, signal, lifetimeSignal) => await gitArc.executeRequest(body, signal, lifetimeSignal),
       executeQuestionnaireRequest: async (body, signal) => {
         const request = WorkbenchRequestUserInputCommandSchema.parse(body);
         const { identity } = await nativeTarget(request.callerThreadId, request.cwd);
@@ -602,14 +602,14 @@ export default ReloadableNode.define<DaemonProcessContext, DaemonRuntimeObjects,
         };
       },
       readReloadDirtSnapshot: () => reloadDirt.getSnapshot(),
-      requestManagedThread: async (request, signal) => request.method?.startsWith("workbench/thread/")
+      requestManagedThread: async (request, signal, lifetimeSignal) => request.method?.startsWith("workbench/thread/")
         ? await threadState.handleManagedThreadRequest(request)
         : request.method === "workbench/message"
           ? await messages.send(request.params).then(
             result => ({ id: request.id ?? null, result }),
             error => ({ id: request.id ?? null, error: { code: -32000, message: error instanceof Error ? error.message : "Workbench message failed." } }),
           )
-          : await subagents.handleRequest(request, signal),
+          : await subagents.handleRequest(request, signal, lifetimeSignal),
       workbenchProjectRoot: context.legacyMigrationProjectRoot,
     }, undefined, undefined, commandLogger);
     // Calls other daemons' threads relay here run only after this daemon authorizes them; none of these ports can relay onward.

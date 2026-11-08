@@ -111,9 +111,9 @@ export default class WorkbenchCoreGitFeature {
       listCatalogProjects: async () => (await projectCatalog.readCatalog()).data,
       resolveProjectFromCwd: async (cwd, ownerThreadId) => await projectCatalog.resolveAgentEndpointProjectFromCwd(cwd, { endpointName: "Git arc", ownerThreadId }),
       resolveProjectById: async (projectId) => await projectCatalog.resolveProjectById(projectId),
-      approveMachineClaims: async (request, signal) => await ports.approvals().request({
+      approveMachineClaims: async (request, signal, invocation) => await ports.approvals().request({
         ...request, turnId: request.turnId ?? await ports.activeTurn(request.threadId, request.harness),
-      }, signal),
+      }, signal, invocation),
       transitions,
     });
     const resolveGitArcIdentity: GitArcThreadIdentityResolver = async input => await gitArc.resolveThreadIdentity(input);

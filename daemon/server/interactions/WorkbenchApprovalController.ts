@@ -3,7 +3,7 @@
  * - WorkbenchApprovalControllerOptions: lifecycle, presentation, saved-rule, delivery, and outcome ports.
  * - WorkbenchApprovalOpenResult: whether an opened approval was decided automatically, shown, or closed meanwhile.
  * - WorkbenchApprovalHandoff: opaque pending-approval state a successor controller adopts across core reloads.
- * - default WorkbenchApprovalController: own every live approval across providers, auto-allow patches inside approved claims, apply the thread's approval mode, wait in-process for Workbench-hosted ones, and expose shown requests a parent agent may decide for its child; transports only adapt native requests and decisions.
+ * - default WorkbenchApprovalController: own every live approval across providers, auto-allow patches inside approved claims, apply the thread's approval mode, wait in-process for Workbench-hosted ones (a reload's replay of the same invocation re-attaches instead of asking again), and expose shown requests a parent agent may decide for its child; transports only adapt native requests and decisions.
  */
 import { randomUUID } from "node:crypto";
 import type {
@@ -71,8 +71,15 @@ type PendingApproval = {
   subject: WorkbenchApprovalSubject;
   request: WorkbenchUserInputRequest | null;
   remember: { projectId: ProjectId; workdir: string; candidates: RememberCandidate[] } | null;
-  status: "opening" | "shown" | "responding";
+  /** `decided`: a hosted decision made while no attempt was attached, waiting for its invocation's replay. */
+  status: "opening" | "shown" | "responding" | "decided";
+  /** The attached attempt of a hosted request; null while a reload replays its invocation, and for provider requests. */
   waiter: HostedWaiter | null;
+  /** A hosted request's original invocation: replays of it re-attach here, and only its end retracts the approval. */
+  invocation?: AbortSignal;
+  decision?: WorkbenchApprovalDecision;
+  /** Stops listening for the invocation's end once the entry is gone. */
+  release?: () => void;
 };
 
 /** Shared by every controller generation; `current` is the committed owner, `ended` once no successor remains. */
@@ -114,7 +121,9 @@ export default class WorkbenchApprovalController {
 
   /**
    * Show a Workbench-hosted approval and wait in-process for its decision. The wait survives core reloads:
-   * whichever generation owns the shared approvals settles it.
+   * whichever generation owns the shared approvals settles it. `signal` is this attempt; `invocation` is the original
+   * call a reload replays. A replay re-attaches to its invocation's approval, so the approval mode, reviewer and saved
+   * rules run once per invocation; only an answer or the invocation ending settles it.
    */
   async request(input: {
     harness: WorkbenchHarness;
@@ -122,27 +131,67 @@ export default class WorkbenchApprovalController {
     turnId: WorkbenchTurnId | null;
     itemId: string | null;
     subject: WorkbenchApprovalSubject;
-  }, signal: AbortSignal): Promise<WorkbenchApprovalDecision> {
+  }, signal: AbortSignal, invocation: AbortSignal = signal): Promise<WorkbenchApprovalDecision> {
     signal.throwIfAborted();
-    const requestKey = randomUUID();
+    invocation.throwIfAborted();
     let waiter!: HostedWaiter;
     const decided = new Promise<WorkbenchApprovalDecision>((resolve, reject) => { waiter = { resolve, reject }; });
     // Every rejection is also observed below through `await decided` or the signal; this only marks it handled.
     decided.catch(() => undefined);
-    const shared = this.shared;
+    let entry = this.replayedEntry(input, invocation);
     const onAbort = () => {
       waiter.reject(signal.reason ?? new Error("The approval request was cancelled."));
-      shared.current.close(input.harness, requestKey);
+      // The approval stays shown for a replay; the invocation's own end retracts it.
+      if (entry?.waiter === waiter) entry.waiter = null;
     };
     signal.addEventListener("abort", onAbort, { once: true });
     try {
-      const opened = await this.show({ ...input, requestKey, allowSession: false }, waiter);
-      if (opened.kind === "decided") return opened.decision;
-      // Every path that ends a shown or closed entry (answer, close, abort, shutdown) settles its waiter.
+      if (entry) {
+        if (entry.decision) {
+          this.forget(entry);
+          return entry.decision;
+        }
+        entry.waiter?.reject(new Error("A replay of this approval request took it over."));
+        entry.waiter = waiter;
+      } else {
+        const requestKey = randomUUID();
+        const opened = this.show({ ...input, requestKey, allowSession: false }, waiter, invocation);
+        // `show` registers the entry before its first await.
+        entry = this.pending.get(key(input.harness, requestKey)) ?? null;
+        await opened;
+      }
+      // Every path that ends an entry (answer, automatic decision, close, invocation end, shutdown) settles its waiter.
       return await decided;
     } finally {
       signal.removeEventListener("abort", onAbort);
     }
+  }
+
+  /** The approval an earlier attempt of the same invocation opened; one asking about something else is retracted. */
+  private replayedEntry(input: { harness: WorkbenchHarness; threadId: WorkbenchThreadId; subject: WorkbenchApprovalSubject }, invocation: AbortSignal) {
+    const entry = [...this.pending.values()].find(candidate => candidate.invocation === invocation
+      && candidate.harness === input.harness && candidate.threadId === input.threadId);
+    if (!entry) return null;
+    if (JSON.stringify(entry.subject) === JSON.stringify(input.subject)) return entry;
+    this.close(entry.harness, entry.requestKey);
+    return null;
+  }
+
+  private forget(entry: PendingApproval) {
+    if (this.pending.get(key(entry.harness, entry.requestKey)) === entry) this.pending.delete(key(entry.harness, entry.requestKey));
+    entry.release?.();
+  }
+
+  /** Settle an approval that was never shown: a hosted attempt takes it now, or its invocation's replay later. */
+  private decideUnshown(entry: PendingApproval, decision: WorkbenchApprovalDecision): WorkbenchApprovalOpenResult {
+    if (entry.invocation && !entry.waiter) {
+      entry.status = "decided";
+      entry.decision = decision;
+    } else {
+      this.forget(entry);
+      entry.waiter?.resolve(decision);
+    }
+    return { kind: "decided", decision };
   }
 
   /** Idempotent per (harness, requestKey): transports re-open what they still hold after a reload. */
@@ -158,7 +207,9 @@ export default class WorkbenchApprovalController {
     return await this.show(input, null);
   }
 
-  private async show(input: Parameters<WorkbenchApprovalController["open"]>[0], waiter: HostedWaiter | null): Promise<WorkbenchApprovalOpenResult> {
+  private async show(
+    input: Parameters<WorkbenchApprovalController["open"]>[0], waiter: HostedWaiter | null, invocation?: AbortSignal,
+  ): Promise<WorkbenchApprovalOpenResult> {
     this.lifetime.signal.throwIfAborted();
     const existing = this.pending.get(key(input.harness, input.requestKey));
     if (existing) return { kind: "shown" };
@@ -167,24 +218,31 @@ export default class WorkbenchApprovalController {
       requestKey: input.requestKey, subject: input.subject, request: null, remember: null, status: "opening", waiter,
     };
     this.pending.set(key(input.harness, input.requestKey), entry);
+    if (invocation) {
+      const shared = this.shared;
+      const ended = () => { shared.current.close(input.harness, input.requestKey); };
+      invocation.addEventListener("abort", ended, { once: true });
+      entry.invocation = invocation;
+      entry.release = () => { invocation.removeEventListener("abort", ended); };
+    }
     const isCurrent = () => this.pending.get(key(input.harness, input.requestKey)) === entry && !this.shared.ended;
 
     let summary: string | undefined;
     const policy = await this.applyApprovalMode(entry, input.subject);
     if (!isCurrent()) return { kind: "closed" };
     if (policy.kind === "allow") {
-      this.pending.delete(key(input.harness, input.requestKey));
+      const decided = this.decideUnshown(entry, { kind: "allowOnce" });
       await this.recordOutcome(entry, "autoApproved");
-      return { kind: "decided", decision: { kind: "allowOnce" } };
+      return decided;
     }
     if (input.subject.kind === "command" && input.subject.rememberable) {
       try {
         const automatic = await this.evaluateSavedRules(entry, input.subject);
         if (!isCurrent()) return { kind: "closed" };
         if (automatic) {
-          this.pending.delete(key(input.harness, input.requestKey));
+          const decided = this.decideUnshown(entry, automatic);
           if (automatic.kind === "allowOnce") await this.recordOutcome(entry, "autoApproved");
-          return { kind: "decided", decision: automatic };
+          return decided;
         }
       } catch (error) {
         if (!isCurrent()) return { kind: "closed" };
@@ -219,9 +277,10 @@ export default class WorkbenchApprovalController {
   close(harness: WorkbenchHarness, requestKey: string) {
     const entry = this.pending.get(key(harness, requestKey));
     if (!entry) return;
-    this.pending.delete(key(harness, requestKey));
+    this.forget(entry);
     entry.waiter?.reject(new Error("The approval request ended before a decision."));
-    if (entry.status === "opening") return;
+    // Unshown entries were never visible; decided ones already resolved visibly when answered.
+    if (entry.status === "opening" || entry.status === "decided") return;
     void this.resolveVisibly(entry);
   }
 
@@ -290,11 +349,17 @@ export default class WorkbenchApprovalController {
     }
     if (!isCurrent()) throw gone();
     // Settle ownership before delivery so the transport's own cleanup cannot race a second resolution.
-    this.pending.delete(key(entry.harness, entry.requestKey));
+    const awaitingReplay = Boolean(entry.invocation && !entry.waiter);
+    if (awaitingReplay) {
+      entry.status = "decided";
+      entry.decision = decision;
+    } else {
+      this.forget(entry);
+    }
     // The agent resumes on delivery; a status it reports next must land after its thread leaves pending input.
     await this.resolveVisibly(entry);
     if (entry.waiter) entry.waiter.resolve(decision);
-    else if (!await this.options.deliver(entry.harness, { threadId: entry.threadId, requestKey: entry.requestKey, decision })) throw gone();
+    else if (!awaitingReplay && !await this.options.deliver(entry.harness, { threadId: entry.threadId, requestKey: entry.requestKey, decision })) throw gone();
     await this.recordOutcome(entry, decision.kind === "decline" ? "denied" : "approved");
     return { ok: true as const };
   }
@@ -305,8 +370,9 @@ export default class WorkbenchApprovalController {
     if (this.shared.current !== this || this.shared.ended) return;
     this.shared.ended = true;
     for (const entry of this.pending.values()) {
+      entry.release?.();
       entry.waiter?.reject(new Error("Workbench stopped before the approval was decided."));
-      if (entry.status === "opening") continue;
+      if (entry.status === "opening" || entry.status === "decided") continue;
       // Thread state is retiring with this owner; provider transports re-open what they still hold.
       this.options.broadcast(entry.harness, { method: "questionnaire/resolved", params: { threadId: entry.threadId, requestKey: entry.requestKey } });
     }

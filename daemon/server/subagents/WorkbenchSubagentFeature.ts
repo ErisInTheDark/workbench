@@ -113,7 +113,9 @@ export default class WorkbenchSubagentFeature {
     this.remote.dispose();
     return this.controller.dispose();
   }
-  handleRequest(request: JsonRpcRequest, signal?: AbortSignal): Promise<JsonRpcResponse> { return this.controller.handleRequest(request, signal); }
+  handleRequest(request: JsonRpcRequest, signal?: AbortSignal, invocation?: AbortSignal): Promise<JsonRpcResponse> {
+    return this.controller.handleRequest(request, signal, invocation);
+  }
   listRelationships(projectId: ProjectId) { return this.store.list({ projectId }); }
   readRoster(threadId: WorkbenchThreadId) { return this.store.readRoster(threadId); }
   getOwned(parentThreadId: WorkbenchThreadId, projectId: ProjectId, threadId: WorkbenchThreadId) {

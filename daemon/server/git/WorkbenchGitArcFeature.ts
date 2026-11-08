@@ -106,14 +106,14 @@ export interface WorkbenchGitArcFeatureOptions {
   resolveProjectById(projectId: ProjectId): Promise<ResolvedProject>;
   /** Daemon-project machine roots; defaults to this machine's filesystem roots. */
   withMachineRoots?(resolution: AgentEndpointProjectResolution, requestPaths: readonly string[]): Promise<AgentEndpointProjectResolution>;
-  /** The thread's approval mode deciding new machine claims; absent rejects them. */
+  /** The thread's approval mode deciding new machine claims; absent rejects them. `invocation` is the call a reload replays. */
   approveMachineClaims?(request: {
     harness: WorkbenchHarness;
     threadId: WorkbenchThreadId;
     turnId: WorkbenchTurnId | null;
     itemId: string | null;
     subject: WorkbenchApprovalSubject;
-  }, signal: AbortSignal): Promise<WorkbenchApprovalDecision>;
+  }, signal: AbortSignal, invocation?: AbortSignal): Promise<WorkbenchApprovalDecision>;
   transitions: Pick<WorkbenchThreadTransitionCoordinator, "run">
     & Partial<Pick<WorkbenchThreadTransitionCoordinator, "read" | "readMany" | "runMany">>
     & Pick<ReturnType<typeof createWorktreeGitTransitions>, "ownership">;
@@ -346,6 +346,7 @@ export default class WorkbenchGitArcFeature {
     owner: { harness: WorkbenchHarness; threadId: WorkbenchThreadId },
     adoptionSource: { harness: WorkbenchHarness; threadId: WorkbenchThreadId } | null,
     signal: AbortSignal,
+    invocation?: AbortSignal,
   ) {
     if (project.project.kind !== "daemon" || !project.project.roots.some(isMachineGitArcRoot)) return;
     const requested = await this.requestedMachineClaims(project, request, owner, adoptionSource);
@@ -362,7 +363,7 @@ export default class WorkbenchGitArcFeature {
     const decision = await this.options.approveMachineClaims({
       harness: owner.harness, threadId: owner.threadId, turnId: null, itemId: null,
       subject: { kind: "claims", reason: await this.claimIntent(project, request, owner), paths },
-    }, signal);
+    }, signal, invocation);
     if (decision.kind === "decline") throw new Error(decision.feedback ?? `Machine claims were declined: ${paths.join(", ")}`);
   }
 
@@ -543,7 +544,8 @@ export default class WorkbenchGitArcFeature {
     }
   }
 
-  async executeRequest(input: object, signal?: AbortSignal) {
+  /** `invocation` is the original agent call a reload replays; approvals this request opens belong to it. */
+  async executeRequest(input: object, signal?: AbortSignal, invocation?: AbortSignal) {
     const parsed = GitCheckpointRequestSchema.safeParse(input);
     if (!parsed.success) return failureResponse(createGitArcFailureFromError("unknown", parsed.error));
     try {
@@ -588,7 +590,7 @@ export default class WorkbenchGitArcFeature {
       if ((effectiveRequest.action === "compare" || effectiveRequest.action === "diff") && modifiedSince === null) {
         throw new Error("The managed thread creation timestamp is unavailable for Git arc inspection.");
       }
-      await this.approveMachineClaims(project, effectiveRequest, owner, adoptionSource, this.lifecycleSignal(signal));
+      await this.approveMachineClaims(project, effectiveRequest, owner, adoptionSource, this.lifecycleSignal(signal), invocation);
       if (effectiveRequest.action === "arcWait") {
         try {
           const proposalId = effectiveRequest.proposalId;

@@ -34,7 +34,8 @@ interface WorkbenchAgentDirectPort {
   }>;
   patchClaims?: (harness: string, input: { raw: string; callerThreadId: string | null }, signal: AbortSignal) => Promise<string>;
   executeBrowseRequest(body: Buffer, signal: AbortSignal): Promise<Response>;
-  executeGitArcRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
+  /** `lifetimeSignal` is the original invocation a reload replays; approvals it opens belong to it. */
+  executeGitArcRequest?: (body: object, signal: AbortSignal, lifetimeSignal?: AbortSignal) => Promise<Response>;
   executeQuestionnaireRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeThreadGitRequest?: (body: object, signal: AbortSignal) => Promise<Response>;
   executeThreadRecallRequest?: (request: WorkbenchAgentCliRequest, signal: AbortSignal) => Promise<Response>;
@@ -72,7 +73,7 @@ interface WorkbenchAgentDirectPort {
   getReloadScopeCatalog?: () => readonly DaemonReloadScopeDescriptor[];
   readReloadDirtSnapshot?: () => WorkbenchReloadDirtSnapshot;
   /** `signal` is the caller's; a subagent wait ends as soon as it aborts. */
-  requestManagedThread?: (message: JsonRpcRequest, signal?: AbortSignal) => Promise<JsonRpcResponse>;
+  requestManagedThread?: (message: JsonRpcRequest, signal?: AbortSignal, lifetimeSignal?: AbortSignal) => Promise<JsonRpcResponse>;
   workbenchProjectRoot?: string;
 }
 
@@ -384,7 +385,7 @@ export default class WorkbenchAgentCommandController {
     }
     const body = Buffer.from(request.body ? JSON.stringify(request.body) : "");
     if (request.path === "/api/subagents" && request.body) {
-      return await this.dispatchSubagentRequest(request.body, signal);
+      return await this.dispatchSubagentRequest(request.body, signal, request.lifetimeSignal);
     }
     if (request.path === "/api/message/wait" && request.body && this.direct.executeMessageWaitRequest) {
       return await this.direct.executeMessageWaitRequest(request.body, signal, request.lifetimeSignal);
@@ -401,7 +402,7 @@ export default class WorkbenchAgentCommandController {
       return await this.dispatchManagedThreadRequest(request.path, request.body, signal);
     }
     if (request.path === "/api/git-checkpoint" && request.body && this.direct.executeGitArcRequest) {
-      return await this.direct.executeGitArcRequest(request.body, signal);
+      return await this.direct.executeGitArcRequest(request.body, signal, request.lifetimeSignal);
     }
     if (request.path === "/api/request-user-input" && request.body && this.direct.executeQuestionnaireRequest) {
       return await this.direct.executeQuestionnaireRequest(request.body, signal);
@@ -553,7 +554,7 @@ export default class WorkbenchAgentCommandController {
     return Response.json(response.result ?? {});
   }
 
-  private async dispatchSubagentRequest(body: Record<string, unknown>, signal: AbortSignal) {
+  private async dispatchSubagentRequest(body: Record<string, unknown>, signal: AbortSignal, lifetimeSignal?: AbortSignal) {
     const requestManagedThread = this.direct.requestManagedThread;
     if (!requestManagedThread) {
       throw new Error("Direct subagent dispatch is not configured.");
@@ -576,7 +577,7 @@ export default class WorkbenchAgentCommandController {
       return Response.json(response.result ?? {});
     }
 
-    const response = await requestManagedThread({ id: 0, method: textMethod, params: body }, signal);
+    const response = await requestManagedThread({ id: 0, method: textMethod, params: body }, signal, lifetimeSignal);
     if (response.error) {
       return Response.json({ error: response.error.message }, { status: 400 });
     }

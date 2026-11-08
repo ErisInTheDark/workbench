@@ -91,7 +91,10 @@ export interface WorkbenchSubagentControllerOptions {
   approvals?: {
     pendingFor(threadId: WorkbenchThreadId): ReadonlyArray<{ requestKey: string; subject: WorkbenchApprovalSubject }>;
     decide(input: { threadId: WorkbenchThreadId; requestKey: string; decision: WorkbenchApprovalDecision }): Promise<unknown>;
-    ask(parent: { harness: WorkbenchHarness; threadId: WorkbenchThreadId }, subject: WorkbenchApprovalSubject, signal: AbortSignal): Promise<WorkbenchApprovalDecision>;
+    /** `invocation` is the agent call a reload replays; its replay re-attaches to the same question. */
+    ask(
+      parent: { harness: WorkbenchHarness; threadId: WorkbenchThreadId }, subject: WorkbenchApprovalSubject, signal: AbortSignal, invocation?: AbortSignal,
+    ): Promise<WorkbenchApprovalDecision>;
   };
   /** Children in other folders or on other daemons; absent where no relay exists. */
   remote?: WorkbenchRemoteSubagents;
@@ -225,14 +228,17 @@ export default class WorkbenchSubagentController {
     await Promise.all(this.requests);
   }
 
-  /** `signal` is the caller's: aborting it ends a wait at once, wherever the wait still awaits. */
-  handleRequest(message: JsonRpcRequest, signal?: AbortSignal): Promise<JsonRpcResponse> {
-    const operation = Promise.resolve().then(() => this.handleRequestOwned(message, signal));
+  /**
+   * `signal` is the caller's: aborting it ends a wait at once, wherever the wait still awaits. `invocation` is the agent call a
+   * reload replays; an approval it forwards belongs to it.
+   */
+  handleRequest(message: JsonRpcRequest, signal?: AbortSignal, invocation?: AbortSignal): Promise<JsonRpcResponse> {
+    const operation = Promise.resolve().then(() => this.handleRequestOwned(message, signal, invocation));
     this.requests.add(operation);
     return operation.finally(() => this.requests.delete(operation));
   }
 
-  private async handleRequestOwned(message: JsonRpcRequest, callerSignal?: AbortSignal): Promise<JsonRpcResponse> {
+  private async handleRequestOwned(message: JsonRpcRequest, callerSignal?: AbortSignal, invocation?: AbortSignal): Promise<JsonRpcResponse> {
     const id = message.id ?? null;
     try {
       if (!this.active) throw new Error("Subagent controller is draining for runtime reload.");
@@ -245,7 +251,7 @@ export default class WorkbenchSubagentController {
         const signal = callerSignal ? AbortSignal.any([callerSignal, this.lifetime.signal]) : this.lifetime.signal;
         await this.canonicalParams(params);
         return { id, result: message.method === "workbench/subagent/approval"
-          ? await this.approval(params, signal) : await this.promote(params, signal) };
+          ? await this.approval(params, signal, invocation) : await this.promote(params, signal) };
       }
       await this.canonicalParams(params);
       switch (message.method) {
@@ -738,7 +744,7 @@ export default class WorkbenchSubagentController {
   }
 
   /** Forward one child's outside-sandbox request to the user on this thread, or deny it. */
-  private async approval(params: Record<string, unknown>, signal: AbortSignal) {
+  private async approval(params: Record<string, unknown>, signal: AbortSignal, invocation?: AbortSignal) {
     const approvals = this.approvals;
     if (!approvals) throw new Error("Subagent approvals are unavailable in this runtime.");
     const records = await this.ownedRecords(params);
@@ -756,7 +762,7 @@ export default class WorkbenchSubagentController {
       decide: async (requestKey, decision) => remote
         ? await remote.owner.decideApproval(remote.caller, record, requestKey, decision, signal)
         : await approvals.decide({ threadId: record.threadId, requestKey, decision }),
-      ask: (subject, askSignal) => approvals.ask({ harness: parent.harness, threadId: parent.callerThreadId }, subject, askSignal),
+      ask: (subject, askSignal) => approvals.ask({ harness: parent.harness, threadId: parent.callerThreadId }, subject, askSignal, invocation),
     }, choice, signal) };
   }
 
