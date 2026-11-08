@@ -54,9 +54,6 @@ interface StackIdentityLike {
   threadId: string;
 }
 
-/** Tips are walked from untrusted refs; bound the walk so corrupt parent loops cannot hang a request. */
-const MAX_STACK_DEPTH = 200;
-
 export interface GitArcPreparedStackRevision {
   commits: Map<string, string>;
   deletes: Array<{ oldValue: string; ref: string }>;
@@ -104,7 +101,7 @@ export default class GitArcStackController {
     return await GitObjectReadSession.memo(key, async () => {
       const layers: GitArcStackLayer[] = [];
       let cursor: string | null = tip;
-      while (cursor && layers.length < MAX_STACK_DEPTH) {
+      while (cursor) {
         const resolved = await this.repository.readCommitAt(cursor);
         if (!resolved) {
           GitObjectReadSession.forget(key);
