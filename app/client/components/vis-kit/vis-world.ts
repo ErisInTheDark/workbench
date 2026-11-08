@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - VisWorldInput: a declarative fake workspace for vis mockups: devices, projects with folders per device, and git facts.
+ * - VisWorldInput: a declarative fake workspace for vis mockups: devices, projects with folders per device, git facts and
+ *   sidebar threads.
  * - VisWorldPayload: one observation payload as the app server would publish it, minus its subscription envelope.
  * - default VisWorld: resolve an input into stable ids, answer workspace queries and daemon commands with schema-shaped
  *   payloads, and name folders and daemons for the vis file. Wrap real components in VisProviders to feed them.
@@ -10,12 +11,14 @@ import appStateReleases from "workbench-shared/state/workbench-app-state-release
 import type { PresentationSnapshot } from "workbench-shared/state/workbench-presentation-state";
 import type { GitPeerStatus } from "workbench-shared/workbench/git/git-peer-contracts";
 import {
-  DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema,
+  DaemonIdSchema, LogicalProjectIdSchema, ProjectIdSchema, ProjectIdentityKeySchema, WorkbenchThreadIdSchema,
   type DaemonId, type LogicalProjectId, type ProjectId,
 } from "workbench-shared/workbench/identity";
 import type { ProjectLocationReference } from "workbench-shared/workbench/project/project-location";
 import type { WorkbenchProjectOption } from "workbench-shared/types";
 import type { WorkspaceObservation, WorkspaceProjects, WorkspaceQuery } from "workbench-shared/workbench/workspace/workspace-observation";
+import { getProjectQualifiedThreadDisplayKey, getThreadDisplayThreadKey } from "workbench-shared/workbench/thread/thread-display-layout";
+import { WorkbenchThreadSidebarThreadRowSchema, type WorkbenchThreadSidebarThreadRow } from "workbench-shared/workbench/thread/thread-sidebar-row";
 
 export interface VisWorldInput {
   /** `roots` are its project discovery folders; `dirs` are extra plain folders the folder picker lists. */
@@ -39,7 +42,19 @@ export interface VisWorldInput {
   }>;
   /** Commits each folder has that another same-project folder lacks, by `daemon:path` keys. */
   sync?: Array<{ from: string; to: string; ahead: number; behind?: number }>;
+  /** Top-level sidebar threads, in the folder named by its `daemon:path` key; `id` is a UUID. */
+  threads?: Array<{
+    folder: string;
+    id: string;
+    title: string;
+    status?: "working" | "needsAttention" | "completed";
+    minutesAgo?: number;
+    pinned?: boolean;
+    claimedPaths?: string[];
+  }>;
 }
+
+type VisThread = { folder: Folder; row: WorkbenchThreadSidebarThreadRow; key: string };
 
 export type VisWorldPayload = {
   [Kind in WorkspaceObservation["kind"]]: Omit<Extract<WorkspaceObservation, { kind: Kind }>, "subscriptionId" | "generation" | "revision">;
@@ -76,9 +91,16 @@ function sha(seed: string) {
 const slug = (value: string) => value.replace(/[^a-z0-9]+/giu, "-").replace(/^-|-$/gu, "").toLowerCase() || "folder";
 const leaf = (path: string) => path.split(/[\\/]/u).filter(Boolean).at(-1) ?? path;
 
+const LIFECYCLES = {
+  working: { kind: "working", reason: "acceptedIntent", settled: false, agent: { agentStatus: "working" } },
+  needsAttention: { kind: "needsAttention", reason: "noActiveTurn", settled: false },
+  completed: { kind: "completed", reason: "userCompleted", settled: false },
+} as const;
+
 export default class VisWorld {
   readonly folders: readonly Folder[];
   private readonly daemons: Folder["daemon"][];
+  private readonly threads: readonly VisThread[];
 
   constructor(readonly input: VisWorldInput) {
     this.daemons = input.daemons.map((daemon, index) => ({
@@ -103,6 +125,21 @@ export default class VisWorld {
           } satisfies WorkbenchProjectOption,
         };
       });
+    });
+    // Sidebar times read relative to the viewer's clock, so threads are placed against it, to the whole second rows carry.
+    const now = Math.floor(Date.now() / 1_000) * 1_000;
+    this.threads = (input.threads ?? []).map(thread => {
+      const folder = this.folder(thread.folder);
+      const threadId = WorkbenchThreadIdSchema.parse(thread.id);
+      const row = WorkbenchThreadSidebarThreadRowSchema.parse({
+        activityAt: now - (thread.minutesAgo ?? 1) * 60_000, entryKind: "thread", title: thread.title,
+        identity: { harness: "codex", threadId }, lifecycle: LIFECYCLES[thread.status ?? "completed"],
+        metadata: { archived: false, pinned: Boolean(thread.pinned), snoozed: false },
+        ...(thread.claimedPaths?.length ? { gitArc: {
+          phase: "active", checkpointCommit: sha(`${thread.id}/checkpoint`), claimedPaths: thread.claimedPaths, proposals: [],
+        } } : {}),
+      });
+      return { folder, row, key: getProjectQualifiedThreadDisplayKey(folder.logicalProjectId, getThreadDisplayThreadKey("codex", threadId)) };
     });
   }
 
@@ -136,13 +173,42 @@ export default class VisWorld {
         return { ...current, kind: "projectGroups", data: { orderedProjectIds: ids, unsettledProjectIds: [], unarchivedProjectIds: [] } };
       }
       case "projectSelection": return { ...current, kind: "projectSelection" };
-      case "projectThreads": return { ...current, kind: "projectThreads", data: {
-        members: [], folders: { pinned: [], projects: {} },
-        placement: { main: [], archived: [], pinned: [], snoozed: [], settled: [], settledCount: 0 },
-        projects: this.folders.map(folder => ({ location: { daemonId: folder.daemon.id, projectId: folder.projectId }, ...current, archivedCount: 0 })),
-      } };
+      case "projectThreads": {
+        const listed = this.threads.filter(thread => !query.projects
+          || query.projects.some(project => project.kind === "logical" ? project.projectId === thread.folder.logicalProjectId
+            : project.location.daemonId === thread.folder.daemon.id && project.location.projectId === thread.folder.projectId));
+        const keys = (pinned: boolean) => listed.filter(thread => thread.row.entryKind === "thread" && thread.row.metadata.pinned === pinned)
+          .map(thread => thread.key);
+        return { ...current, kind: "projectThreads", data: {
+          members: listed.map(({ folder, row, key }) => ({
+            key, homeKey: key, logicalProjectId: folder.logicalProjectId, location: { daemonId: folder.daemon.id, projectId: folder.projectId },
+            hostname: folder.daemon.hostname, rootPath: folder.input.path, title: row.title, activityAt: row.activityAt,
+            ref: { kind: "thread" as const, identity: row.identity },
+          })),
+          folders: { pinned: [], projects: {} },
+          placement: {
+            main: keys(false), archived: [], pinned: keys(true).map(key => ({ kind: "thread" as const, key })), snoozed: [], settled: [],
+            settledCount: 0,
+          },
+          projects: this.folders.map(folder => ({ location: { daemonId: folder.daemon.id, projectId: folder.projectId }, ...current, archivedCount: 0 })),
+        } };
+      }
       case "archivedThreads": return { ...current, kind: "archivedThreads", data: { members: [], projects: [] } };
-      case "threadSummaries": return { ...current, kind: "threadSummaries", data: {} };
+      case "threadSummaries": return { ...current, kind: "threadSummaries", data: Object.fromEntries(query.threadIds.map(threadId => {
+        const thread = this.thread(threadId);
+        return [threadId, thread ? {
+          location: { daemonId: thread.folder.daemon.id, projectId: thread.folder.projectId }, logicalProjectId: thread.folder.logicalProjectId,
+          summary: { facts: {}, row: thread.row },
+        } : null];
+      })) };
+      case "thread": {
+        const thread = this.thread(query.threadId);
+        return { ...current, kind: "thread", data: null, runtime: {}, owner: thread ? {
+          phase: "current", logicalProjectId: thread.folder.logicalProjectId,
+          location: { daemonId: thread.folder.daemon.id, projectId: thread.folder.projectId },
+          identity: { harness: thread.row.identity.harness, projectId: thread.folder.projectId, threadId: thread.row.identity.threadId },
+        } : { phase: "unavailable", failure: "This vis world has no such thread." } };
+      }
       case "runtime": return { ...current, kind: "runtime", data: null };
       case "reloadOperation": return { ...current, kind: "reloadOperation",
         data: { action: null, phase: "idle", error: null, startedAt: null, daemonId: null } };
@@ -238,6 +304,10 @@ export default class VisWorld {
       schemaVersion: Math.max(...Object.values(appStateReleases).map(release => release.version)),
       rows: createEmptyWorkbenchClientStateRows(),
     };
+  }
+
+  private thread(threadId: string) {
+    return this.threads.find(thread => thread.row.identity.threadId === threadId) ?? null;
   }
 
   private roots(daemon: Folder["daemon"]) {

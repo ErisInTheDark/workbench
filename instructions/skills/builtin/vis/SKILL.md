@@ -36,9 +36,16 @@ auto exception exists because users often want that untangling done quickly so t
 - **Hard rule: render real components; never redraw them.** Copying a component's markup or class names, or drawing its menus or tooltips pinned open, is a failure. Users must be able to press, hover and drag the real thing.
 - Real components: find where the live app renders them; pass fake data through their real data seams. Fake `useSyncExternalStore` stores must return stable snapshots.
 - Project instructions may name its mockup helpers (fake data providers, option tabs); use them.
-- Real component unusable in a mockup (prop drilling, context only one parent provides): fix the real component so it renders, as a briefed change. Never work around it in the vis file.
-- The user may invoke the `auto` skill to skip approval for exactly those component fixes. That autonomy ends when the mockup stage ends; later work needs normal approval.
-- New UI under test: build it from the same real primitives its surface uses, placed inside the real surface.
+<!-- Agents read "build new UI from real primitives" as licence to assemble lookalikes in the vis file: a fake transcript
+from step rows, a picker popover, a confirm dialog. Users could not judge the product, and mobile showed UI kinds the app
+never uses. Agents also gated every real-component edit behind a full brief, or asked again after the user had already
+said to iterate; mockup work is exploratory, so one agreement covers it. Moving designs into real owners then
+collapsed every alternative into one design with no tabs; variants read from a mockup-only seam keep options alive.
+After a pick, agents also reverted silently, so users read mockup edits as throwaway; the keep/remove split and saying
+why makes the judgement visible. -->
+- **Hard rule: proposed UI lives in its real owner.** New or changed UI (a transcript card, a menu item, a row control) is an edit to the component owning that surface, shown through the real surface (`ThreadPreview`, project providers). The vis file only mounts surfaces and feeds fake data; assembling lookalikes there is redrawing. Alternatives stay tabs: each is a variant the owner reads from a mockup-only seam (Workbench: `useVisVariant`), never collapsed into one design. Mockup edits are real work, not scaffolding: after the pick, keep the picked design, renderability fixes and mockup tooling; remove unpicked variants and product surfaces nothing will wire; record deferred ones as todos. Tell the user what you kept and removed, and why. Same for components unusable in a mockup (prop drilling, context only one parent provides): fix the real component.
+- Use only interaction kinds the product already has; never invent dialogs, popovers or flows it lacks.
+- Editing real components needs the user's agreement to iterate on them, once: their instruction to do so, the `auto` skill, or one questionnaire. On it, enter the workflow's implementation mode and iterate: show renders, never plans or briefs. It ends with the mockup stage; later work needs normal approval.
 - Style with Tailwind classes; both contexts compile them. Theme tokens: `text-text`, `text-fg/muted`, `bg-fg/5`, `border-fg/10`; support light and dark.
 - Frame height follows page content: no viewport-height sizing (`h-screen`, `min-h-screen`, `100vh`). Leave page background transparent.
 - `.html`/`.svg`: add `<link rel="workbench-css">` in `<head>` for project CSS.
