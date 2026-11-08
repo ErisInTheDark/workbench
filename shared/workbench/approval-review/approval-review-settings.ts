@@ -33,6 +33,9 @@ export type ApprovalReviewSettingsUpdate = z.input<typeof ApprovalReviewSettings
 
 export type ApprovalReviewerAvailability = { ready: true; detail: null } | { ready: false; detail: string };
 
-export type ApprovalReviewVerdict =
-  | { decision: "allow"; detail: string }
-  | { decision: "manual"; detail: string };
+/** `assessment` is the reviewer's short judgement, such as "deny, high risk"; `rationale` its explanation, when it gives one. */
+export interface ApprovalReviewVerdict {
+  decision: "allow" | "manual";
+  assessment: string;
+  rationale: string | null;
+}

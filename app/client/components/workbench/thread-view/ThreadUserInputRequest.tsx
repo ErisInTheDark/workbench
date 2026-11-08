@@ -2,7 +2,7 @@
  * Exports:
  * - default ThreadUserInputRequest: render full or compact questionnaires, including loading, live answers, previews, and history;
  *   a compact-first answer needs Enter held, or on touch a choice from the submit menu.
- * Local components bind a keyed editing session and render approval command context through the contextual project.
+ * Local components bind a keyed editing session; approval command, path and auto-review context render through ThreadApprovalContext.
  */
 "use client";
 
@@ -25,7 +25,6 @@ import {
   type InlineMentionHighlightSources,
 } from "../../../workbench/thread/inline-mention-highlights";
 import { toInlineMentionOverlayHighlights } from "../../../workbench/thread/inline-mention-styles";
-import { getThreadCommandDisplay, isBrowseCommandMatcherClaim } from "../../../workbench/thread/thread-command-matchers";
 import {
   hasWorkbenchApprovalDecisionSelection,
   isWorkbenchApprovalDecisionQuestion,
@@ -39,7 +38,7 @@ import ComposerAttachments from "./ComposerAttachments";
 import { isMobileTextInputEnvironment, useMobileTextInputEnvironment } from "./mobile-text-input-environment";
 import { formatQuestionDisplay, shouldUseCompactSingleQuestionDisplay } from "./thread-user-input-request-preview";
 import { getQuestionnaireTitle } from "workbench-shared/workbench/thread/thread-questionnaire-transcript";
-import ThreadCommandDisplay from "./ThreadCommandDisplay";
+import ThreadApprovalContext, { ThreadApprovalCommand } from "./ThreadApprovalContext";
 import { renderThreadInlineMarkdown } from "./thread-markdown-render";
 import type { DraftUpdate } from "./DraftSessionController";
 import { useDraftSession } from "./use-draft-session";
@@ -49,7 +48,6 @@ import AutoCompactSendBadge, { autoCompactSendLabel } from "./AutoCompactSendBad
 import AutoCompactSendMenu from "./AutoCompactSendMenu";
 import { getQuestionnaireEnterAction } from "./thread-composer-controls";
 import useCompactSendHold, { COMPACT_SEND_HOLD_MS } from "./use-compact-send-hold";
-import { useProject } from "../use-projects";
 
 function joinClasses (...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -159,27 +157,6 @@ function ThreadUserInputRequestFrame({
     >
       {children}
     </div>
-  );
-}
-
-function ThreadApprovalCommand ({ request }: { request: WorkbenchUserInputRequest }) {
-  const project = useProject.contextual();
-  const commandContext = request.approval?.command ?? null;
-  const input = commandContext
-    ? { command: commandContext.command, commandActions: commandContext.commandActions, cwd: commandContext.cwd }
-    : null;
-  const display = input ? project?.commandDisplay(input) ?? getThreadCommandDisplay(input) : null;
-
-  if (!display || !commandContext) {
-    return null;
-  }
-
-  return (
-    <>
-      <ThreadCommandDisplay command={commandContext.command} display={display} browse={isBrowseCommandMatcherClaim(display.claimedBy)} previewHeight="auto" />
-      {commandContext.justification ? <p className="m-0 whitespace-pre-wrap break-words text-[0.92em] leading-[1.65] text-text">{commandContext.justification}</p> : null}
-      {commandContext.networkTarget ? <p className="m-0 break-all text-[0.84em] text-fg/muted">Network target: {commandContext.networkTarget}</p> : null}
-    </>
   );
 }
 
@@ -498,6 +475,7 @@ function ThreadUserInputRequestContent (props: ThreadUserInputRequestProps) {
                     ) : null}
                   </div>
                 ) : null}
+                {isWorkbenchApprovalDecisionQuestion(question) ? <ThreadApprovalContext request={request} /> : null}
                 <div className={compact ? "mt-2 space-y-0.5" : "mt-3 space-y-2"}>
                   {useQuickResponseLayout && quickResponseOption ? (
                     <div className="flex items-stretch gap-2">

@@ -24,6 +24,8 @@ export const WorkbenchApprovalSubjectSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("fileChange"), reason: text.nullable(), grantRoot: text.nullable() }).strict(),
   z.object({ kind: z.literal("permissions"), cwd: text, reason: text.nullable(), permissions: text.nullable() }).strict(),
   z.object({ kind: z.literal("patch"), reason: text.nullable(), grantRoot: text.nullable(), paths: z.array(text) }).strict(),
+  /** New live ownership of machine paths: write permission for later edits, writing nothing itself. */
+  z.object({ kind: z.literal("claims"), reason: text.nullable(), paths: z.array(text) }).strict(),
 ]);
 export type WorkbenchApprovalSubject = z.infer<typeof WorkbenchApprovalSubjectSchema>;
 

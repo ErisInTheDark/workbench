@@ -361,9 +361,23 @@ export default class WorkbenchGitArcFeature {
     if (!this.options.approveMachineClaims) throw new Error("Machine Git arc claims need an approval owner, and none is available.");
     const decision = await this.options.approveMachineClaims({
       harness: owner.harness, threadId: owner.threadId, turnId: null, itemId: null,
-      subject: { kind: "patch", reason: "Claim machine files for editing through a Git arc.", grantRoot: null, paths },
+      subject: { kind: "claims", reason: await this.claimIntent(project, request, owner), paths },
     }, signal);
     if (decision.kind === "decline") throw new Error(decision.feedback ?? `Machine claims were declined: ${paths.join(", ")}`);
+  }
+
+  /** The intent a claim request states, else the thread's published plan intent: why the agent wants these paths. */
+  private async claimIntent(
+    project: AgentEndpointProjectResolution,
+    request: GitCheckpointRequest,
+    owner: { harness: WorkbenchHarness; threadId: WorkbenchThreadId },
+  ) {
+    const stated = (request.action === "planStart" || request.action === "planClaims") && request.intentName ? request : null;
+    const intent = stated ?? await this.workspaceController.findPlanState(project, owner.harness, owner.threadId);
+    const name = intent?.intentName?.trim();
+    if (!name) return null;
+    const description = intent?.intentDescription?.trim();
+    return description ? `${name}\n${description}` : name;
   }
 
   /** Every path a request could newly activate for its caller; held-path filtering happens in the caller. */

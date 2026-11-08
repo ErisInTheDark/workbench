@@ -75,8 +75,8 @@ function harness(options: {
   });
   const options_ = (requestKey: string) => controller.list().find(pending => pending.requestKey === requestKey)
     ?.request.questions[0]?.options.map(option => option.label) ?? [];
-  const summary = (requestKey: string) => controller.list().find(pending => pending.requestKey === requestKey)?.request.summary ?? null;
-  return { controller, events, delivered, outcomes, saves, reviews, errors, open, choose, options: options_, summary };
+  const review = (requestKey: string) => controller.list().find(pending => pending.requestKey === requestKey)?.request.approval?.review ?? null;
+  return { controller, events, delivered, outcomes, saves, reviews, errors, open, choose, options: options_, review };
 }
 
 test("skip approvals decides every request without asking or reviewing, and records it as auto-approved", async () => {
@@ -90,7 +90,7 @@ test("skip approvals decides every request without asking or reviewing, and reco
 });
 
 test("auto-approve allows what the reviewer allows and records it as auto-approved", async () => {
-  const h = harness({ mode: "auto", review: async () => ({ decision: "allow", detail: "Routine read." }) });
+  const h = harness({ mode: "auto", review: async () => ({ decision: "allow", assessment: "allow, low risk", rationale: "Routine read." }) });
   assert.deepEqual(await h.open("first"), { kind: "decided", decision: { kind: "allowOnce" } });
   assert.deepEqual(h.reviews, ["command"]);
   assert.deepEqual(h.outcomes.map(({ outcome }) => outcome), ["autoApproved"]);
@@ -98,9 +98,9 @@ test("auto-approve allows what the reviewer allows and records it as auto-approv
 });
 
 test("auto-approve falls back to the person with the reviewer's verdict when it is unsure or refuses", async () => {
-  const h = harness({ mode: "auto", review: async () => ({ decision: "manual", detail: "Deletes system files." }) });
+  const h = harness({ mode: "auto", review: async () => ({ decision: "manual", assessment: "deny, high risk", rationale: "Deletes system files." }) });
   assert.deepEqual(await h.open("first"), { kind: "shown" });
-  assert.match(h.summary("first") ?? "", /Deletes system files\./u);
+  assert.deepEqual(h.review("first"), { outcome: "manual", assessment: "deny, high risk", rationale: "Deletes system files." });
   await h.choose("first", ["Decline"]);
   assert.deepEqual(h.delivered, [{ kind: "decline" }]);
   assert.deepEqual(h.outcomes.map(({ outcome }) => outcome), ["denied"]);
@@ -109,7 +109,9 @@ test("auto-approve falls back to the person with the reviewer's verdict when it 
 test("a failing reviewer never decides: the person is asked and the failure is reported", async () => {
   const h = harness({ mode: "auto", review: async () => { throw new Error("TypeSafe key rejected"); } });
   assert.deepEqual(await h.open("first"), { kind: "shown" });
-  assert.match(h.summary("first") ?? "", /TypeSafe key rejected/u);
+  const review = h.review("first");
+  assert.equal(review?.outcome, "failed");
+  assert.match(review?.outcome === "failed" ? review.error : "", /TypeSafe key rejected/u);
   assert.ok(h.errors.some(message => message.includes("TypeSafe key rejected")));
   assert.deepEqual(h.outcomes, []);
 });
@@ -124,7 +126,7 @@ test("patches wholly inside approved claims decide without asking, even with app
 });
 
 test("approvals on keeps asking without consulting a reviewer", async () => {
-  const h = harness({ mode: "approvals", review: async () => ({ decision: "allow", detail: "fine" }) });
+  const h = harness({ mode: "approvals", review: async () => ({ decision: "allow", assessment: "allow, low risk", rationale: "fine" }) });
   assert.deepEqual(await h.open("first"), { kind: "shown" });
   assert.deepEqual(h.reviews, []);
 });
@@ -135,7 +137,7 @@ test("an approval closed while its review is running is never decided", async ()
   const opened = h.open("first");
   for (let attempt = 0; attempt < 20 && !release; attempt++) await Promise.resolve();
   h.controller.close("claude", "first");
-  release({ decision: "allow", detail: "fine" });
+  release({ decision: "allow", assessment: "allow, low risk", rationale: "fine" });
   assert.deepEqual(await opened, { kind: "closed" });
   assert.deepEqual(h.outcomes, []);
 });

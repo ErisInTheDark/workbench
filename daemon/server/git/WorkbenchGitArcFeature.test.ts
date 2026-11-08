@@ -1639,13 +1639,14 @@ test("a thread of one of two projects sharing a root settles and reads its arc t
   assert.equal(response.status, 200, await response.text());
 });
 
-test("daemon claims ask the approval mode once for exactly the new machine paths, before any Git work", async () => {
+test("daemon claims ask the approval mode once for exactly the new machine paths and the plan's intent, before any Git work", async () => {
   const machineRoot = path.resolve("/machine-root");
   const held = path.join(machineRoot, "held.txt");
   const fresh = path.join(machineRoot, "fresh.txt");
   const scratch = { id: "daemon", name: "daemon", root: "C:/Git/Project", rootPath: "C:/Git/Project" };
   const events: string[] = [];
   const approvals: string[][] = [];
+  const subjects: Array<{ kind: string; reason?: string | null }> = [];
   let decision: { kind: "allowOnce" } | { kind: "decline"; feedback: string } = { kind: "allowOnce" };
   const feature = waitFeature({
     resolveProjectFromCwd: async () => ({
@@ -1656,9 +1657,10 @@ test("daemon claims ask the approval mode once for exactly the new machine paths
       ...resolution,
       project: { ...resolution.project, roots: [...resolution.project.roots, { id: "m", machine: true, name: "m", root: machineRoot, rootPath: machineRoot }] },
     }),
-    approveMachineClaims: async (request: { subject: { kind: string; paths?: string[] } }) => {
+    approveMachineClaims: async (request: { subject: { kind: string; reason?: string | null; paths?: string[] } }) => {
       events.push("approve");
       approvals.push(request.subject.paths ?? []);
+      subjects.push({ kind: request.subject.kind, reason: request.subject.reason });
       return decision;
     },
   });
@@ -1666,9 +1668,11 @@ test("daemon claims ask the approval mode once for exactly the new machine paths
     workspaceController: {
       execute: () => Promise<object>;
       findLifecycleState: () => Promise<object>;
+      findPlanState: () => Promise<object>;
     };
   };
   internal.workspaceController.findLifecycleState = async () => ({ phase: "active", claimedPaths: [held.replace(/\\/gu, "/")] });
+  internal.workspaceController.findPlanState = async () => ({ intentName: "Split the module", intentDescription: "Roll back failed upgrades." });
   internal.workspaceController.execute = async () => { events.push("execute"); return {}; };
   const claim = async () => await feature.executeRequest({
     action: "arcClaims", addPaths: [held, fresh, path.join(scratch.root, "relative.txt")], adoptPaths: [], removePaths: [], roots: [],
@@ -1678,6 +1682,7 @@ test("daemon claims ask the approval mode once for exactly the new machine paths
   const approved = await claim();
   assert.equal(approved.ok, true, await approved.text());
   assert.deepEqual(approvals, [[fresh]]);
+  assert.deepEqual(subjects, [{ kind: "claims", reason: "Split the module\nRoll back failed upgrades." }]);
   assert.deepEqual(events, ["approve", "execute"]);
 
   decision = { kind: "decline", feedback: "not that file" };

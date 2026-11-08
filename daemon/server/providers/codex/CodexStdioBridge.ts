@@ -9,7 +9,6 @@ import { toThreadTurn, type CodexThreadSource, type CodexTurnSource } from "work
 import { frameCodexAttachmentInput } from "workbench-shared/codex/attachment-input";
 import { randomUUID } from "node:crypto";
 import type { CodexApprovalPort } from "./CodexApprovalAdapter";
-import { summarizeApprovalList } from "../../lib/workbench/approval-presentation";
 import type { WorkbenchApprovalDecision, WorkbenchApprovalSubject } from "workbench-shared/workbench/provider/provider-approval";
 import { buildWorkbenchQuestionnaireRequest } from "workbench-shared/workbench/thread/thread-questionnaire-request";
 import {
@@ -502,7 +501,7 @@ function describeRequestedPermissions(permissions: RequestPermissionProfile) {
     sections.push("Network access\nEnabled");
   }
 
-  const fileSystemPaths = summarizeApprovalList(normalizeFileSystemPermissionPaths(permissions.fileSystem));
+  const fileSystemPaths = normalizeFileSystemPermissionPaths(permissions.fileSystem).map(path => path.trim()).filter(Boolean).join("\n");
   if (fileSystemPaths) {
     sections.push(`File system access\n${fileSystemPaths}`);
   }

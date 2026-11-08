@@ -43,7 +43,5 @@ export async function reviewWithSystemOne(input: {
   if (!parsed.success) throw new Error(`${input.label} returned an unexpected answer shape.`);
   const safe = parsed.data.answers[QUESTION_ID]!.noul;
   const percent = Math.round(safe * 100);
-  return safe >= SYSTEMONE_ALLOW_THRESHOLD
-    ? { decision: "allow", detail: `${input.label} judged it ${percent}% safe.` }
-    : { decision: "manual", detail: `${input.label} judged it only ${percent}% safe to run unattended.` };
+  return { decision: safe >= SYSTEMONE_ALLOW_THRESHOLD ? "allow" : "manual", assessment: `${percent}% safe`, rationale: null };
 }

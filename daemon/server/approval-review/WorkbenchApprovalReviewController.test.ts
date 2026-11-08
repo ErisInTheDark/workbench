@@ -83,7 +83,7 @@ test("reviews go to the selected reviewer and refuse without a selection or usab
     const states: string[] = [];
     const codex = create({ codexReviewer: () => ({
       availability: async () => ({ ready: true, detail: null }),
-      review: async state => { states.push(state); return { decision: "allow", detail: "ok" }; },
+      review: async state => { states.push(state); return { decision: "allow", assessment: "low risk", rationale: null }; },
     }) });
     assert.equal((await codex.review(subject, new AbortController().signal)).decision, "allow");
     assert.match(states[0]!, /winget install foo/u);
@@ -122,7 +122,7 @@ test("provider and credential failures read as unavailable reviewers and are rep
       readOpenCodeApiKey: async () => { throw new Error("bad auth.json"); },
       codexReviewer: () => ({
         availability: async () => { throw new Error("app server down"); },
-        review: async () => ({ decision: "manual", detail: "unused" }),
+        review: async () => ({ decision: "manual", assessment: "unused", rationale: null }),
       }),
     }).read();
     for (const reviewer of snapshot.reviewers.filter(item => item.id !== "typesafe-jev")) {

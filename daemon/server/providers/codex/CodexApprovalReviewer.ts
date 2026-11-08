@@ -49,9 +49,11 @@ export function parseCodexReviewVerdict(text: string): ApprovalReviewVerdict {
   const verdict = VerdictSchema.safeParse(value);
   if (!verdict.success) throw new Error("Codex auto-review returned an unexpected verdict shape.");
   const { decision, risk, rationale } = verdict.data;
-  return decision === "allow" && (risk === "low" || risk === "medium")
-    ? { decision: "allow", detail: `Codex auto-review (${risk} risk): ${rationale}` }
-    : { decision: "manual", detail: `Codex auto-review (${decision}, ${risk} risk): ${rationale}` };
+  return {
+    decision: decision === "allow" && (risk === "low" || risk === "medium") ? "allow" : "manual",
+    assessment: `${decision}, ${risk} risk`,
+    rationale,
+  };
 }
 
 /** Codex auto-review runs on ChatGPT-plan usage; API-key and Bedrock logins cannot reach the model. */

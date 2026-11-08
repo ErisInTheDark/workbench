@@ -59,6 +59,12 @@ export function formatApprovalReviewState(subject: WorkbenchApprovalSubject) {
         ...(subject.networkTarget ? [`Network target: ${subject.networkTarget}`] : []),
         `Justification: ${subject.justification ?? "(none given)"}`,
       ];
+      case "claims": return [
+        "Action: claim machine files for later editing through a Workbench Git arc.",
+        "Claiming writes nothing now. Workbench snapshots each file's current content first, so every later edit is tracked and can be reviewed or restored.",
+        `Paths: ${subject.paths.join(", ")}`,
+        `Justification: ${subject.reason ?? "(none given)"}`,
+      ];
       case "patch": return [
         "Action: write files outside the sandbox.",
         `Paths: ${subject.paths.join(", ")}`,

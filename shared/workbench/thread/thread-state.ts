@@ -525,6 +525,11 @@ export const WorkbenchPendingApprovalSchema = z.object({
         command: z.string(), commandActions: z.array(CommandActionSchema), cwd: z.string(),
         justification: z.string().optional(), networkTarget: z.string().optional(),
       }).strict().optional(),
+      files: z.object({ action: z.enum(["claim", "write"]), paths: z.array(z.string()) }).strict().optional(),
+      review: z.discriminatedUnion("outcome", [
+        z.object({ outcome: z.literal("manual"), assessment: z.string(), rationale: z.string().nullable() }).strict(),
+        z.object({ outcome: z.literal("failed"), error: z.string() }).strict(),
+      ]).optional(),
     }).strict().optional(),
   }).strict(),
   requestKey: z.string().min(1),

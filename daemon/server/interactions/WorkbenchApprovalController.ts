@@ -7,7 +7,8 @@
  */
 import { randomUUID } from "node:crypto";
 import type {
-  WorkbenchApprovalMode, WorkbenchHarness, WorkbenchPendingUserInputRequest, WorkbenchUserInputRequest, WorkbenchUserInputResponse,
+  WorkbenchApprovalMode, WorkbenchApprovalReviewContext, WorkbenchHarness, WorkbenchPendingUserInputRequest, WorkbenchUserInputRequest,
+  WorkbenchUserInputResponse,
 } from "workbench-shared/types";
 import type { ApprovalReviewVerdict } from "workbench-shared/workbench/approval-review/approval-review-settings";
 import type { ProjectId, WorkbenchThreadId, WorkbenchTurnId } from "workbench-shared/workbench/identity";
@@ -176,7 +177,6 @@ export default class WorkbenchApprovalController {
       await this.recordOutcome(entry, "autoApproved");
       return { kind: "decided", decision: { kind: "allowOnce" } };
     }
-    summary = policy.summary;
     if (input.subject.kind === "command" && input.subject.rememberable) {
       try {
         const automatic = await this.evaluateSavedRules(entry, input.subject);
@@ -190,7 +190,7 @@ export default class WorkbenchApprovalController {
         if (!isCurrent()) return { kind: "closed" };
         this.options.logError(`Saved command approvals failed: ${sanitize(error)}`);
         entry.remember = null;
-        summary = [summary, "Saved command approvals are unavailable. Review this request manually."].filter(Boolean).join("\n\n");
+        summary = "Saved command approvals are unavailable. Review this request manually.";
       }
     }
 
@@ -203,6 +203,7 @@ export default class WorkbenchApprovalController {
         description: `Approve commands starting with \`${displayPrefix(candidate.prefix)}\` in this project.`,
       })),
       ...(summary ? { summary } : {}),
+      ...(policy.review ? { review: policy.review } : {}),
     });
     entry.status = "shown";
     this.options.broadcast(input.harness, {
@@ -316,10 +317,10 @@ export default class WorkbenchApprovalController {
 
   /**
    * Apply the thread's approval mode before anything is shown. Only an explicit skip or a reviewer allow decides;
-   * every reviewer doubt or failure leaves the request for the person, with the reason in its summary.
+   * every reviewer doubt or failure leaves the request for the person, with the verdict or failure shown beside it.
    */
   private async applyApprovalMode(entry: PendingApproval, subject: WorkbenchApprovalSubject): Promise<
-    { kind: "allow" } | { kind: "ask"; summary?: string }
+    { kind: "allow" } | { kind: "ask"; review?: WorkbenchApprovalReviewContext }
   > {
     // Claims were approved as write permission, so a patch inside them needs no second decision.
     if (subject.kind === "patch" && subject.paths.length && this.options.coveredByClaims) {
@@ -340,10 +341,12 @@ export default class WorkbenchApprovalController {
     if (mode !== "auto") return { kind: "ask" };
     try {
       const verdict = await this.options.review({ threadId: entry.threadId, subject }, this.lifetime.signal);
-      return verdict.decision === "allow" ? { kind: "allow" } : { kind: "ask", summary: `Auto-review asked for you: ${verdict.detail}` };
+      return verdict.decision === "allow" ? { kind: "allow" } : {
+        kind: "ask", review: { outcome: "manual", assessment: verdict.assessment, rationale: verdict.rationale },
+      };
     } catch (error) {
       this.options.logError(`Auto-review failed: ${sanitize(error)}`);
-      return { kind: "ask", summary: `Auto-review failed (${sanitize(error)}). Review this request manually.` };
+      return { kind: "ask", review: { outcome: "failed", error: sanitize(error) } };
     }
   }
 

@@ -126,6 +126,8 @@
  * - WorkbenchUserInputOption: questionnaire answer option.
  * - WorkbenchUserInputQuestion: questionnaire question contract.
  * - WorkbenchApprovalCommandContext: approval command context.
+ * - WorkbenchApprovalFilesContext: every path a file write or machine claim approval grants.
+ * - WorkbenchApprovalReviewContext: the auto-approve reviewer's verdict or failure that left a request for the person.
  * - WorkbenchUserInputApprovalContext: approval request context.
  * - WorkbenchUserInputMcpToolContext: MCP tool an enable request is about.
  * - WorkbenchUserInputMcpAuthorizationContext: server link a sign-in request asks the user to open.
@@ -1125,8 +1127,21 @@ export interface WorkbenchApprovalCommandContext {
   networkTarget?: string;
 }
 
+/** Every path an approval grants: `claim` gives write permission for later edits, `write` writes now. */
+export interface WorkbenchApprovalFilesContext {
+  action: "claim" | "write";
+  paths: string[];
+}
+
+/** Why the selected auto-approve reviewer left the request for the person. */
+export type WorkbenchApprovalReviewContext =
+  | { outcome: "manual"; assessment: string; rationale: string | null }
+  | { outcome: "failed"; error: string };
+
 export interface WorkbenchUserInputApprovalContext {
   command?: WorkbenchApprovalCommandContext;
+  files?: WorkbenchApprovalFilesContext;
+  review?: WorkbenchApprovalReviewContext;
 }
 
 /** The MCP server tool an agent asks the user to enable. */

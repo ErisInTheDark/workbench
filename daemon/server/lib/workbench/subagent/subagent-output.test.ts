@@ -74,7 +74,17 @@ test("gives a parent what a child's approval asks and the choices it really has"
   }));
   assert.ok(patch.includes("std/ts/restrictions.dx"));
 
-  for (const output of [command, patch]) {
+  const paths = Array.from({ length: 12 }, (_, index) => `/etc/nixos/mods/file-${index}.nix`);
+  const widePatch = renderSubagentQuestionnaireOutput(thread([]), buildWorkbenchApprovalPresentation({
+    id: "approval-wide-patch", allowSession: false, subject: { kind: "patch", reason: "Split the module", grantRoot: null, paths },
+  }));
+  for (const path of paths) assert.ok(widePatch.includes(path), path);
+  const claims = renderSubagentQuestionnaireOutput(thread([]), buildWorkbenchApprovalPresentation({
+    id: "approval-claims", allowSession: false, subject: { kind: "claims", reason: "Split the module", paths },
+  }));
+  for (const path of paths) assert.ok(claims.includes(path), path);
+
+  for (const output of [command, patch, widePatch, claims]) {
     assert.match(output, /forward/u);
     assert.match(output, /deny/u);
     assert.doesNotMatch(output, /Allow once|Allow for session|Decline/u);

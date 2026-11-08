@@ -27,8 +27,9 @@ function trailingCommentary(thread: { turns: Turn[] }) {
 }
 
 function renderApproval(request: WorkbenchUserInputRequest) {
-  const command = request.approval?.command;
+  const { command, files, review } = request.approval ?? {};
   return [
+    request.title.trim(),
     ...request.questions.flatMap(question => [question.header.trim(), question.question.trim()]),
     ...(command ? [
       `Command:\n${command.command}`,
@@ -36,6 +37,10 @@ function renderApproval(request: WorkbenchUserInputRequest) {
       command.justification ? `Reason: ${command.justification}` : "",
       command.networkTarget ? `Network target: ${command.networkTarget}` : "",
     ] : []),
+    files ? `${files.action === "claim" ? "Claim" : "Write"} paths:\n${files.paths.join("\n")}` : "",
+    review ? review.outcome === "manual"
+      ? `Auto-review would not decide this (${review.assessment})${review.rationale ? `: ${review.rationale}` : "."}`
+      : `Auto-review failed: ${review.error}` : "",
     "Answer with subagent approval: forward it to the user, or deny it.",
   ].filter(Boolean).join("\n");
 }

@@ -1,6 +1,7 @@
 /*
  * Exports:
- * - default ThreadClaimedFileList: render static Git arc path rows with optional failure tone, change totals and an unlisted-path count.
+ * - default ThreadClaimedFileList: render static Git arc path rows with optional failure tone, full-path labels, change totals and an
+ *   unlisted-path count.
  * - ThreadClaimMarker/ThreadClaimMarkerIcon: select the semantic glyph for a claim-state row.
  */
 import { isProjectDirectoryPath } from "../../../workbench/project/project-file-path";
@@ -27,6 +28,7 @@ export function ThreadClaimMarkerIcon({ marker }: { marker: ThreadClaimMarker })
 }
 
 export default function ThreadClaimedFileList({
+  fullPaths = false,
   inset = true,
   label = "Claimed",
   marker = "claimed",
@@ -35,6 +37,8 @@ export default function ThreadClaimedFileList({
   tone = "default",
   totalCount = paths.length,
 }: {
+  /** Label rows with the whole path instead of its shortest unambiguous suffix. */
+  fullPaths?: boolean;
   inset?: boolean;
   label?: string;
   marker?: ThreadClaimMarker;
@@ -63,7 +67,8 @@ export default function ThreadClaimedFileList({
               <ThreadClaimMarkerIcon marker={marker} />
             </span>
             <ThreadSummaryText text={label} />
-            <ProjectFilePath className="min-w-0 max-w-full shrink align-baseline text-[0.9em]" path={displayPath} targetType={targetType} />
+            <ProjectFilePath className="min-w-0 max-w-full shrink align-baseline text-[0.9em]" path={displayPath} targetType={targetType}
+              {...fullPaths ? { label: displayPath } : {}} />
             {totals ? <ThreadFileChangeTotals additions={totals.additions} deletions={totals.deletions} /> : null}
           </div>
         );
