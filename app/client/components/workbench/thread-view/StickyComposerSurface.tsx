@@ -8,6 +8,7 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 import ChevronIcon from "../ChevronIcon";
+import { shouldPinStickyComposer } from "./sticky-composer-pin";
 import { useThreadScrollViewportContext } from "./thread-scroll-viewport-context";
 import useHeightTransition from "./use-height-transition";
 
@@ -125,13 +126,16 @@ function StickyComposerSurface({
       const naturalHeight = reserveRect.height - marginBlockStart - flowMarginEnd;
       const viewportBottom = viewport.getBoundingClientRect().bottom;
       const pinLine = viewportBottom - Number.parseFloat(shellStyle.getPropertyValue("--sticky-composer-inset"));
-      const pinnedHeight = pinned?.naturalHeight === naturalHeight ? pinned.height : naturalHeight;
-      // Hand over at the top edge, so pinned and natural shells meet without a jump. A collapsed bar returns only once its slot is off screen.
-      const stuck = !docked && (shell.dataset.stickyStuck === "true"
-        ? naturalTop > shell.getBoundingClientRect().top
-        : surface.dataset.collapsed === "true"
-          ? naturalTop >= viewportBottom
-          : naturalTop + pinnedHeight > pinLine);
+      const stuck = shouldPinStickyComposer({
+        docked,
+        stuck: shell.dataset.stickyStuck === "true",
+        collapsed: surface.dataset.collapsed === "true",
+        naturalTop,
+        shellHeight: shell.getBoundingClientRect().height,
+        pinnedHeight: pinned?.naturalHeight === naturalHeight ? pinned.height : naturalHeight,
+        pinLine,
+        viewportBottom,
+      });
       // A collapse resize only means something while pinned; finish it before the reserve can measure a mid-flight height.
       if (shell.dataset.stickyStuck !== String(stuck)) cancelCollapseHeightTransition();
       shell.dataset.stickyStuck = String(stuck);
