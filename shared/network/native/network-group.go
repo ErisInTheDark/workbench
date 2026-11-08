@@ -542,10 +542,14 @@ func (group *networkGroupController) acceptEnrolment(ctx context.Context, ownerI
 	root := ""
 	if pinned := group.node.snapshot().RootCertificate; pinned != nil { root = *pinned }
 	if err := welcome.Envelope.verify(root, ownerID); err != nil { return err }
-	if current := group.directory(); current != nil && welcome.Envelope.Directory.Group.ID != current.Group.ID {
+	current := group.directory()
+	if current != nil && welcome.Envelope.Directory.Group.ID != current.Group.ID {
 		return errors.New("discovery would replace this app's network")
 	}
-	if err := group.store(ctx, welcome.Envelope.Directory); err != nil { return err }
+	// Reconnecting to an unchanged network returns the revision this app already holds; only the certificate renews.
+	if current == nil || welcome.Envelope.Directory.Group.Revision != current.Group.Revision {
+		if err := group.store(ctx, welcome.Envelope.Directory); err != nil { return err }
+	}
 	leaf, err := saveLeaf(group.node.directory, key, welcome.Certificate, []byte(welcome.Envelope.Root), hostname)
 	if err != nil { return err }
 	return group.node.installCertificate(leaf)

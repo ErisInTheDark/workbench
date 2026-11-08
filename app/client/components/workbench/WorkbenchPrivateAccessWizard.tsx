@@ -4,14 +4,33 @@
  */
 "use client";
 import { useState } from "react";
-import type { WorkbenchNetworkAction } from "workbench-shared/http/workbench-network";
+import type { WorkbenchNetworkAction, WorkbenchNetworkMember } from "workbench-shared/http/workbench-network";
 import { useWorkbenchNetwork } from "../../workbench/app/WorkbenchNetworkClient";
 import privateAccessStep from "../../workbench/app/private-access-step";
+import Disclosure from "../ui/Disclosure";
 import PrimaryButton from "../ui/PrimaryButton";
 import WorkbenchLinkButton from "./WorkbenchLinkButton";
 import WorkbenchCertificateInstall from "./WorkbenchCertificateInstall";
 import WorkbenchCertificateTrust from "./WorkbenchCertificateTrust";
-import { ExternalLinkIcon, RefreshCwIcon } from "./workbench-icons";
+import { ExternalLinkIcon, RefreshCwIcon, TriangleAlertIcon } from "./workbench-icons";
+
+/** The owner sync failed: who, what that means here, and a retry; the sidecar's own error stays behind Details. */
+function SyncFailure({ owner, ownerOnline, detail, busy, onRetry }: {
+  owner: WorkbenchNetworkMember | null; ownerOnline: boolean | null; detail: string | null; busy: boolean; onRetry(): void;
+}) {
+  const name = owner?.label ?? "this network's owner";
+  return <div className="w-full space-y-2">
+    <p className="m-0 flex items-center gap-2 font-semibold text-[color:var(--attention)]">
+      <TriangleAlertIcon className="size-4 shrink-0" />Couldn't sync with {name}{owner ? ", which owns this network" : ""}
+    </p>
+    <p className="m-0 text-sm text-fg/muted">This computer keeps using the member list it already has. Changes made from other computers won't show here until it syncs.</p>
+    <div className="flex flex-wrap items-center gap-3">
+      <PrimaryButton disabled={busy} onClick={onRetry}><RefreshCwIcon className="mr-2 size-4" />Try again</PrimaryButton>
+      {ownerOnline === false ? <span className="text-sm text-fg/muted">{name} is offline right now</span> : null}
+    </div>
+    {detail ? <Disclosure summary="Details" compactSummary><p className="m-0 break-words text-sm text-fg/muted">{detail}</p></Disclosure> : null}
+  </div>;
+}
 
 export default function WorkbenchPrivateAccessWizard() {
   const network = useWorkbenchNetwork();
@@ -34,6 +53,9 @@ export default function WorkbenchPrivateAccessWizard() {
   }
   const act = (action: WorkbenchNetworkAction) => { void run(() => network.client.action(action)); };
   const waiting = step === "connecting" || step === "discovering";
+  const group = snapshot.configuration.group;
+  const owner = group ? snapshot.configuration.members.find(member => member.nodeId === group.ownerNodeId) ?? null : null;
+  const ownerOnline = owner ? status.tailnetDns?.members?.find(entry => owner.addresses.includes(entry.address))?.online ?? null : null;
   if ((step === "ready" || step === "checking") && status.discovery !== "failed" && !error) return null;
   return <section aria-label="Private HTTPS setup" className="
     flex flex-col items-start gap-3 rounded-[0.95rem] border border-[color-mix(in_srgb,var(--text)_10%,transparent)] px-3 py-3 text-sm
@@ -72,10 +94,8 @@ export default function WorkbenchPrivateAccessWizard() {
       </div>
       <WorkbenchCertificateInstall certificate={status.rootCertificate} />
     </> : null}
-    {configuration?.role !== "unconfigured" && step !== "failed" && status.discovery === "failed" ? <div className="space-y-2">
-      <p className="m-0 text-sm text-fg/muted">{status.message ?? "Network updates could not be checked. Previously saved access settings remain in use."}</p>
-      <PrimaryButton disabled={busy || !editable} onClick={() => act({ action: "retry" })}><RefreshCwIcon className="mr-2 size-4" />Check network updates</PrimaryButton>
-    </div> : null}
+    {configuration?.role !== "unconfigured" && step !== "failed" && status.discovery === "failed" ? <SyncFailure
+      owner={owner} ownerOnline={ownerOnline} detail={status.message} busy={busy || !editable} onRetry={() => act({ action: "retry" })} /> : null}
     {step === "failed" ? <>
       <p className="m-0 text-sm text-fg/muted">{snapshot.executable.message ?? status.message ?? snapshot.failure ?? "The connection could not complete."}</p>
       <PrimaryButton disabled={busy || !editable} onClick={() => act({ action: "retry" })}><RefreshCwIcon className="mr-2 size-4" />Reconnect</PrimaryButton>

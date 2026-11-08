@@ -35,6 +35,46 @@ func TestLateEnrolmentCannotOverwriteAnAddressChange(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(node.directory, "leaf.pem")); !os.IsNotExist(err) { t.Fatal("late enrolment replaced the current certificate") }
 }
 
+func TestReenrolmentAtTheCurrentRevisionIsAlreadyUpToDate(t *testing.T) {
+	ca, err := createAuthority(time.Now())
+	if err != nil { t.Fatal(err) }
+	root := string(publicCertificatePEM(ca.certificate))
+	for _, test := range []struct { name string; revision uint64; accepted bool }{
+		{"same revision", 2, true}, {"older revision", 1, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := directoryFixture()
+			current.Group.Revision = 2
+			self, fingerprint, hostname := "nas", current.Members[1].KeyFingerprint, "nas.wb.inthedark.boo"
+			node := &privateNetwork{directory: t.TempDir(), publish: func(privateStatus) {},
+				status: privateStatus{NodeID: &self, KeyFingerprint: &fingerprint, RootCertificate: &root}, refresh: make(chan struct{}, 1)}
+			node.settings.Store(&privateConfiguration{Role: "member", Label: "nas"})
+			node.presentation.Store(&privatePresentation{hostname: hostname})
+			persisted := false
+			group := &networkGroupController{node: node,
+				read: func() networkConfiguration {
+					return networkConfiguration{Mode: "tailnet-service", PrivateAccess: &privateConfiguration{Role: "member", Label: "nas"}, Group: &current.Group, Members: current.Members}
+				},
+				persist: func(context.Context, *uint64, networkConfiguration) error { persisted = true; return nil },
+			}
+			incoming := directoryFixture()
+			incoming.Group.Revision = test.revision
+			envelope, err := signDirectory(incoming, ca)
+			if err != nil { t.Fatal(err) }
+			key, request, err := persistentLeafRequest(node.directory, hostname)
+			if err != nil { t.Fatal(err) }
+			certificate, err := ca.issue(request, hostname, time.Now())
+			if err != nil { t.Fatal(err) }
+			err = group.acceptEnrolment(context.Background(), "desktop", hostname, key, groupWelcome{Envelope: envelope, Certificate: certificate})
+			if (err == nil) != test.accepted { t.Fatalf("accepted = %v, want %v (%v)", err == nil, test.accepted, err) }
+			if persisted { t.Fatal("re-enrolment rewrote durable membership") }
+			if _, err := os.Stat(filepath.Join(node.directory, "leaf.pem")); os.IsNotExist(err) == test.accepted {
+				t.Fatalf("certificate saved = %v, want %v", !os.IsNotExist(err), test.accepted)
+			}
+		})
+	}
+}
+
 func TestDNSPublicationCannotSucceedWithoutSigningTheUpdate(t *testing.T) {
 	for _, setupDefault := range []string{"desktop", "nas"} {
 		directory := directoryFixture()
